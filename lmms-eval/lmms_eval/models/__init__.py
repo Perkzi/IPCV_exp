@@ -59,6 +59,7 @@ AVAILABLE_MODELS = {
     "aria": "Aria",
     "ross": "Ross",
     "vita": "VITA",
+    "qwen2_vl_dart_vit": "Qwen2_VL_DART_ViT",
 }
 
 

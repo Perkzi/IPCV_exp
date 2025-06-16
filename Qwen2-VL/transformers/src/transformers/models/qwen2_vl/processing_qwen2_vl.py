@@ -137,11 +137,11 @@ class Qwen2VLProcessor(ProcessorMixin):
         if image_grid_thw is not None:
             merge_length = self.image_processor.merge_size**2
             index = 0
-            for i in range(len(text)):
+            for i in range(len(text)): # 此处i指第i个文本，即batch_size
                 while "<|image_pad|>" in text[i]:
                     text[i] = text[i].replace(
                         "<|image_pad|>", "<|placeholder|>" * (image_grid_thw[index].prod() // merge_length), 1
-                    )
+                    ) # 只替换第一个
                     index += 1
                 text[i] = text[i].replace("<|placeholder|>", "<|image_pad|>")
 

@@ -307,7 +307,7 @@ class DART(Qwen2VLModel):
             attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
         )
 
-        hidden_states = inputs_embeds
+        hidden_states = inputs_embeds # [batch_size,seq_len.hidden_dim]
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -331,6 +331,7 @@ class DART(Qwen2VLModel):
                     use_cache,
                     cache_position,
                 )
+            # ------------------BEGIN : change from src ------------------
             else:
                 DART_config = self.config.DART_config
                 if DART_config is not None:
@@ -342,8 +343,8 @@ class DART(Qwen2VLModel):
                         device = hidden_states.device
 
                         last_layer_state = layer_outputs[0]
-                        last_layer_state = self.norm(last_layer_state)
-                        k_states = layer_outputs[-2]
+                        last_layer_state = self.norm(last_layer_state) # [batch_size ,seq_len ,hidden_dim]
+                        k_states = layer_outputs[-2] # [batch_size ,num_heads ,seq_len ,head_dim]
 
                         # keep index
                         retained_image_tokens_index = self.get_retained_image_token(self.config, last_layer_state, k_states).to(device)
@@ -372,7 +373,7 @@ class DART(Qwen2VLModel):
                     use_cache=use_cache,
                     cache_position=cache_position,
                 )
-
+            # ------------------END : change from src ------------------
             hidden_states = layer_outputs[0]
 
             if use_cache:
@@ -412,27 +413,29 @@ class DART(Qwen2VLModel):
 
         device = last_layer_state.device
 
+        #上一层的keys [batch_size, num_heads, seq_len, head_dim] --> [batch_size, seq_len, hidden_dim]
         any_states = any_states.permute(0, 2, 1, 3).reshape(any_states.shape[0], any_states.shape[2], -1)
 
-        k_states_image_token = any_states[0][image_token_start_index:image_token_start_index + image_token_length, :]
+        k_states_image_token = any_states[0][image_token_start_index:image_token_start_index + image_token_length, :] # [valid_seq_len, hidden_dim]
         k_states_query_token = any_states[0][image_token_start_index + image_token_length:, :]
 
-        k_states_image_token_L1_norm = torch.norm(k_states_image_token, p=1, dim=-1)
-        k_states_query_token_L1_norm = torch.norm(k_states_query_token, p=1, dim=-1)
+        k_states_image_token_L1_norm = torch.norm(k_states_image_token, p=1, dim=-1) # [valid_seq_len]
+        k_states_query_token_L1_norm = torch.norm(k_states_query_token, p=1, dim=-1) # [valid_seq_len]
 
-        image_indices = (k_states_image_token_L1_norm.topk(pivot_image_token).indices + image_token_start_index).tolist() 
-        query_indices = (k_states_query_token_L1_norm.topk(pivot_text_token).indices + image_token_start_index + image_token_length).tolist()
-        indices_set = set(image_indices + query_indices)
+        image_indices = (k_states_image_token_L1_norm.topk(pivot_image_token).indices + image_token_start_index).tolist() # pivot indices (list)
+        query_indices = (k_states_query_token_L1_norm.topk(pivot_text_token).indices + image_token_start_index + image_token_length).tolist() # pivot indices (list)
+        indices_set = set(image_indices + query_indices) # merge 2 lists
 
+        # 除去pivot image token之外的其他image token的index
         valid_indices = set(range(image_token_start_index, image_token_start_index + image_token_length)) - set(image_indices)
 
         valid_indices_list = list(valid_indices)  
         for item in list(indices_set):
-            valid_vectors = last_layer_state[0][valid_indices_list, :]
-            cos_sim = -torch.nn.functional.cosine_similarity(last_layer_state[0][item, :], valid_vectors, dim=-1)
+            valid_vectors = last_layer_state[0][valid_indices_list, :] # last_layer_state中待处理image token的对应向量 [valid_seq_len - num_pivot_tokens, hidden_dim]
+            cos_sim = -torch.nn.functional.cosine_similarity(last_layer_state[0][item, :], valid_vectors, dim=-1) # 计算余弦相似度 [valid_seq_len - num_pivot_tokens]
             top_k_indices = cos_sim.topk(TOKEN_TOPK).indices
 
-            top_k_real_indices = [valid_indices_list[i] for i in top_k_indices]
+            top_k_real_indices = [valid_indices_list[i] for i in top_k_indices] # 待保留的image token的index
             indices_set.update(top_k_real_indices)
             
             valid_indices.difference_update(top_k_real_indices)
@@ -718,7 +721,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             # time_vit_start = time.time()
             if pixel_values is not None:
                 pixel_values = pixel_values.type(self.visual.get_dtype())
-                image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw).to(inputs_embeds.device)
+                image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw).to(inputs_embeds.device) # [seq_len,hidden_dim]
                 # time_vit_end = time.time()
                 # print("time_cost_vit", time_vit_end - time_vit_start)
                 image_mask = input_ids == self.config.image_token_id
@@ -738,7 +741,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             position_ids=position_ids,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
+            inputs_embeds=inputs_embeds, # [batch_size,seq_len,hidden_dim]
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
