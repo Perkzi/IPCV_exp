@@ -30,7 +30,8 @@ except ImportError:
 def configure_DART(model, config):
 
     if config['Sparse']:
-        model.config.vision_config.DART_config = config
+        #model.config.vision_config.DART_config = config
+        model.visual.config.DART_config = config
 
     else:
         model.config.vision_config.DART_config = None
@@ -61,7 +62,7 @@ class Qwen2_VL_DART_ViT(lmms):
         reduction_ratio=0.778,
         pivot_image_token=4,
         pivot_text_token=4,
-        random_choose = False
+        random_choose = False,
         **kwargs,
     ) -> None:
         super().__init__()
