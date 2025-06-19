@@ -1605,33 +1605,35 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if inputs_embeds is None:
-            print("CUDA memory before creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
+            #print("CUDA memory before creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             inputs_embeds = self.model.embed_tokens(input_ids) # [batch_size, seq_len, hidden_size]
-            print("CUDA memory after creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
+            #print("CUDA memory after creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             if pixel_values is not None:
-                # import time
-                # start_time = time.time()
+                import time
+                time_vit_start = time.time()
                 num_tokens_prev = input_ids.shape[1]
                 #print("CUDA memory before processing image tokens: ", torch.cuda.memory_allocated() / 1024**2, "MB")
                 pixel_values = pixel_values.type(self.visual.get_dtype())
                 image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size
-                # time_vit_end = time.time()
-                # print("time_cost_vit", time_vit_end - time_vit_start)
+                time_vit_end = time.time()
+                #print("time_cost_vit", time_vit_end - time_vit_start)
                 image_embeds.to(inputs_embeds.device)
                 #print("CUDA memory after processing image tokens: ", torch.cuda.memory_allocated() / 1024**2, "MB")
                 input_ids_new, retained_indices = _update_ids_new(input_ids, self.config.image_token_id, retained_nums)
                 # image_mask = input_ids == self.config.image_token_id # [batch_size, seq_len]
                 image_mask = input_ids_new == self.config.image_token_id
-                #inputs_embeds_new = inputs_embeds[retained_indices]
+                # inputs_embeds_new = inputs_embeds[retained_indices]
                 inputs_embeds = inputs_embeds[:,retained_indices,:]
-                print("CUDA memory after updating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
+                # inputs_embeds = inputs_embeds.index_select(1, retained_indices.to(device=inputs_embeds.device)).contiguous() # 原地操作
+                #print("CUDA memory after prunning inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
                 if self.training:
                     inputs_embeds = inputs_embeds.clone()
                 inputs_embeds[image_mask] = image_embeds
+                # print("CUDA memory after updating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
                 position_ids = position_ids[:,:,retained_indices]
                 attention_mask = attention_mask[:,retained_indices]
                 num_tokens_new = input_ids_new.shape[1]
-                print("num_tokens_prev: ", num_tokens_prev," ---> ","num_tokens_new: ", num_tokens_new)
+                #print("num_tokens_prev: ", num_tokens_prev," ---> ","num_tokens_new: ", num_tokens_new,"\n")
 
             if pixel_values_videos is not None:
                 #print("CUDA memory before processing image tokens: ", torch.cuda.memory_allocated() / 1024**2, "MB")
@@ -1925,8 +1927,17 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         image_token_length = last_layer_state.shape[0]
         device = last_layer_state.device
 
-        # 计算需要保留的token数量
-        retained_count = int(image_token_length * (1 - reduction_ratio))
+        # 计算原始值
+        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
+        # 向下取4的倍数
+        TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
+        # 向上取4的倍数
+        TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
+        # 选择与原始值更接近的结果
+        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
+            retained_count = TOKEN_TOPK_down
+        else:
+            retained_count = TOKEN_TOPK_up
         # 确保至少保留一个token
         retained_count = max(retained_count, 1)
         

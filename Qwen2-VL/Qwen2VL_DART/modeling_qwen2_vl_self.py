@@ -716,18 +716,23 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if inputs_embeds is None:
+            print("CUDA memory before creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             inputs_embeds = self.model.embed_tokens(input_ids)
+            print("CUDA memory after creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             # import time
             # time_vit_start = time.time()
             if pixel_values is not None:
                 pixel_values = pixel_values.type(self.visual.get_dtype())
+                import time
+                time_vit_start = time.time()
                 image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw).to(inputs_embeds.device) # [seq_len,hidden_dim]
-                # time_vit_end = time.time()
-                # print("time_cost_vit", time_vit_end - time_vit_start)
+                time_vit_end = time.time()
+                print("time_cost_vit", time_vit_end - time_vit_start)
                 image_mask = input_ids == self.config.image_token_id
                 if self.training:
                     inputs_embeds = inputs_embeds.clone()
                 inputs_embeds[image_mask] = image_embeds
+                print("CUDA memory after updating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             if pixel_values_videos is not None:
                 pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
                 video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw).to(inputs_embeds.device)

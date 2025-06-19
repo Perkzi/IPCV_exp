@@ -13,6 +13,7 @@ max_num_trunction=128
 reduction_ratio=$2
 pivot_image_token=4
 pivot_text_token=4
+random_choose=True
 
 
 python3 -m accelerate.commands.launch \
@@ -20,7 +21,7 @@ python3 -m accelerate.commands.launch \
     --main_process_port 50008 \
     -m lmms_eval \
     --model qwen2_vl_dart_vit \
-    --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,pruned_layer=$pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=False \
+    --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,pruned_layer=$pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose\
     --tasks mme \
     --batch_size 1 \
     --log_samples \
