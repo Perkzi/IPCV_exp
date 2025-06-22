@@ -21,7 +21,7 @@ python3 -m accelerate.commands.launch \
     -m lmms_eval \
     --model qwen2_vl \
     --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,pruned_layer=$pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token \
-    --tasks mme \
+    --tasks scienceqa_full \
     --batch_size 1 \
     --log_samples \
     --output_path "$output_path" \

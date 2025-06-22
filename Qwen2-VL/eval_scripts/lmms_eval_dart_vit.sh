@@ -6,7 +6,7 @@ output_path="./logs/${model_name}/${task}/"
 mkdir -p "$output_path"
 
 Sparse=$1
-pruned_layer=2
+pruned_layer=5
 image_token_start_index=0
 image_token_length=0
 max_num_trunction=128

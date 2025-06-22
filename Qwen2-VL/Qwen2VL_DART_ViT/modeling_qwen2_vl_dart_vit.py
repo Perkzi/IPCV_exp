@@ -52,6 +52,8 @@ from transformers.utils import (
 )
 from .configuration_qwen2_vl_dart_vit import Qwen2VLConfig, Qwen2VLVisionConfig
 
+import time
+
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_func
@@ -1609,42 +1611,35 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             inputs_embeds = self.model.embed_tokens(input_ids) # [batch_size, seq_len, hidden_size]
             #print("CUDA memory after creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             if pixel_values is not None:
-                import time
-                time_vit_start = time.time()
-                num_tokens_prev = input_ids.shape[1]
-                #print("CUDA memory before processing image tokens: ", torch.cuda.memory_allocated() / 1024**2, "MB")
+                # time_vit_start = time.time()
+                # num_tokens_prev = input_ids.shape[1]
                 pixel_values = pixel_values.type(self.visual.get_dtype())
-                image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size
-                time_vit_end = time.time()
+                image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size**2
+                # time_vit_end = time.time()
                 #print("time_cost_vit", time_vit_end - time_vit_start)
                 image_embeds.to(inputs_embeds.device)
-                #print("CUDA memory after processing image tokens: ", torch.cuda.memory_allocated() / 1024**2, "MB")
-                input_ids_new, retained_indices = _update_ids_new(input_ids, self.config.image_token_id, retained_nums)
+                input_ids_new, retained_indices = _update_ids(input_ids, self.config.image_token_id, retained_nums)
                 # image_mask = input_ids == self.config.image_token_id # [batch_size, seq_len]
                 image_mask = input_ids_new == self.config.image_token_id
-                # inputs_embeds_new = inputs_embeds[retained_indices]
                 inputs_embeds = inputs_embeds[:,retained_indices,:]
-                # inputs_embeds = inputs_embeds.index_select(1, retained_indices.to(device=inputs_embeds.device)).contiguous() # 原地操作
+                # inputs_embeds = inputs_embeds.index_select(1, retained_indices.to(device=inputs_embeds.device)).contiguous() # TODO:验证是否为原地操作
                 #print("CUDA memory after prunning inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
                 if self.training:
                     inputs_embeds = inputs_embeds.clone()
                 inputs_embeds[image_mask] = image_embeds
-                # print("CUDA memory after updating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
                 position_ids = position_ids[:,:,retained_indices]
                 attention_mask = attention_mask[:,retained_indices]
-                num_tokens_new = input_ids_new.shape[1]
+                # num_tokens_new = input_ids_new.shape[1]
                 #print("num_tokens_prev: ", num_tokens_prev," ---> ","num_tokens_new: ", num_tokens_new,"\n")
 
             if pixel_values_videos is not None:
-                #print("CUDA memory before processing image tokens: ", torch.cuda.memory_allocated() / 1024**2, "MB")
                 pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
                 video_embeds, retained_nums = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
                 video_embeds.to(inputs_embeds.device)
-                #print("CUDA memory after processing image tokens: ", torch.cuda.memory_allocated() / 1024**2, "MB")
-                input_ids_new, retained_indices = _update_ids_new(input_ids, self.config.video_token_id, retained_nums)
+                input_ids_new, retained_indices = _update_ids(input_ids, self.config.video_token_id, retained_nums)
                 #video_mask = input_ids == self.config.video_token_id
                 video_mask = input_ids_new == self.config.video_token_id
-                inputs_embeds_new = inputs_embeds[:,retained_indices,:]
+                inputs_embeds = inputs_embeds[:,retained_indices,:]
                 inputs_embeds[video_mask] = video_embeds
                 position_ids = position_ids[:,:,retained_indices]
                 attention_mask = attention_mask[:,retained_indices]
@@ -1652,7 +1647,6 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
-        #print("CUDA memory before going in LLM : ", torch.cuda.memory_allocated() / 1024**2, "MB")
         outputs = self.model(
             input_ids=None,
             position_ids=position_ids,
@@ -1664,7 +1658,6 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             output_hidden_states=output_hidden_states, # bool
             return_dict=return_dict, # bool
         )
-        #print("CUDA memory after going in LLM :", torch.cuda.memory_allocated() / 1024**2, "MB")
 
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
@@ -1788,13 +1781,12 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         super().__init__(config)
         self.last_attention = None
         self.config = config
-        self.norm = Qwen2RMSNorm_no_param(config.embed_dim, eps=config.rms_norm_eps) # TODO : 如何传入rms_norm_eps
+        self.norm = Qwen2RMSNorm_no_param(config.embed_dim, eps=config.rms_norm_eps)
     
     def forward(self, hidden_states: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         # hidden_states [grid_t * grid_h * grid_w, 
         #       channel * self.temporal_patch_size * self.patch_size * self.patch_size] 
         # grid_thw[batch_size, 3(t,h,w)]
-        #print("CUDA memory before visual encoding: ", torch.cuda.memory_allocated()/1024**2, "MB")
         hidden_states = self.patch_embed(hidden_states) # [seq_len, embed_dim], 仅改变第一维，做特征维度的映射
         rotary_pos_emb = self.rot_pos_emb(grid_thw) # [seq_len, rot_pos_embed_dim]
 
@@ -1805,6 +1797,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         #--------------------BEGIN------------------------------------
         hidden_states_pkg = {'hidden_states':hidden_states, # [seq_len, embed_dim]
                             'k_states':None}                # [seq_len, num_heads, head_dim]
+        frame_counts = 0
         for i, blk in enumerate(self.blocks):
             DART_config = self.config.DART_config
             if DART_config is not None:
@@ -1817,7 +1810,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     device = hidden_states_pkg['hidden_states'].device
                     last_layer_state = hidden_states_pkg['hidden_states'].detach().clone()
                     last_layer_state = self.norm(last_layer_state)
-                    k_states = hidden_states_pkg['k_states']    # TODO : 如何获取k_states？通过修改attn层的相关输出
+                    k_states = hidden_states_pkg['k_states']  
 
                     if DART_config['random_choose'] is not True:
                         retained_image_tokens_index = self.get_retained_image_token(
@@ -1846,10 +1839,6 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     frame_indices = frame_indices.clamp(min=0, max=num_frames-1)
                     # 统计每帧保留的token数量
                     frame_counts = torch.bincount(frame_indices, minlength=num_frames)
-                    # 计算每帧原始长度
-                    original_lengths = cu_seqlens[1:] - cu_seqlens[:-1]
-                    # 计算裁剪比例
-                    #ratios = frame_counts.to(torch.float) / original_lengths.to(torch.float)
                     # 计算新的cu_seqlens
                     new_cu_seqlens = torch.zeros(len(cu_seqlens), dtype=torch.int32, device=device)
                     new_cu_seqlens[0] = 0
@@ -1859,10 +1848,10 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     cu_seqlens = new_cu_seqlens.to(torch.int32)
         # ------------------------END------------------------------------------
             hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
-            #print("CUDA memory in the vision blk: ", torch.cuda.memory_allocated()/1024**2, "MB")
-        #print("CUDA memory after visual encoding: ", torch.cuda.memory_allocated()/1024**2, "MB")
+        if frame_counts !=0:
+            frame_counts = frame_counts/(self.config.spatial_merge_size**2)
 
-        return self.merger(hidden_states_pkg['hidden_states']), frame_counts/(self.config.spatial_merge_size**2)
+        return self.merger(hidden_states_pkg['hidden_states']), frame_counts
     
     def get_retained_image_token(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
         # any_state [seq_len, num_heads, head_dim]
@@ -1970,106 +1959,7 @@ class Qwen2RMSNorm_no_param(nn.Module):
     def extra_repr(self):
         return f"eps={self.variance_epsilon}"
 
-def _update_ids(input_ids, image_token_ID, retained_nums):
-    # 检查输入维度
-    if input_ids.dim() != 2:
-        raise ValueError(f"Input should be of dimension [batch_size, seq_len], got: {input_ids.shape}")
-    
-    batch_size = input_ids.size(0)
-    if batch_size != 1:
-        raise ValueError(f"Currently only support batch_size=1, got: {batch_size}")
-    
-    # 将二维输入展平为一维处理
-    flat_input = input_ids.squeeze(0)  # [seq_len]
-    
-    # 1. 识别连续的图像标记区间
-    is_image_token = (flat_input == image_token_ID)
-    changes = torch.cat([
-        torch.tensor([True], device=flat_input.device),
-        is_image_token[1:] != is_image_token[:-1],
-        torch.tensor([True], device=flat_input.device)
-    ])
-    change_indices = torch.where(changes)[0]
-    starts = change_indices[0:-1]
-    ends = change_indices[1:] - 1
-    
-    # 2. 分离图像区间和非图像区间
-    image_intervals = []
-    non_image_intervals = []
-    
-    for i in range(len(starts)):
-        start, end = starts[i], ends[i]
-        if is_image_token[start]:
-            image_intervals.append((start, end))
-        else:
-            non_image_intervals.append((start, end))
-    
-    num_frames = len(image_intervals)
-    if num_frames != len(retained_nums):
-        raise ValueError(f"Expected {num_frames} pruning ratios, got {len(prune_ratios)}")
-    
-    # 3. 对每个图像区间进行裁剪并记录保留索引
-    pruned_segments = []
-    kept_indices_segments = []  # 存储每个裁剪区间的保留索引
-    
-    for i, (start, end) in enumerate(image_intervals):
-        interval_length = end - start + 1
-        
-        # 确定实际保留的数量 (不能超过区间长度)
-        retain_count = min(interval_length, retained_nums[i].item())
-        if retain_count <= 0:
-            continue  # 跳过保留数量为0的区间
-        
-        # 均匀选择保留的位置
-        keep_indices = torch.linspace(0, interval_length - 1, retain_count, 
-                                     dtype=torch.long, device=flat_input.device)
-        keep_indices = start + keep_indices
-        
-        # 提取保留的token和索引
-        pruned_segments.append(flat_input[keep_indices])
-        kept_indices_segments.append(keep_indices)
-    
-    # 4. 重建序列和索引序列
-    all_segments = []
-    all_indices_segments = []
-    
-    # 处理非图像区间 - 全部保留
-    for start, end in non_image_intervals:
-        segment_indices = torch.arange(start, end+1, device=flat_input.device)
-        all_segments.append(flat_input[segment_indices])
-        all_indices_segments.append(segment_indices)
-    
-    # 按原始顺序组合
-    pruned_ids_list = []
-    kept_indices_list = []
-    img_idx = 0
-    non_img_idx = 0
-    
-    for i in range(len(starts)):
-        if is_image_token[starts[i]]:
-            if img_idx < len(pruned_segments):  # 检查是否有裁剪后的图像区间
-                pruned_ids_list.append(pruned_segments[img_idx])
-                kept_indices_list.append(kept_indices_segments[img_idx])
-            img_idx += 1
-        else:
-            pruned_ids_list.append(all_segments[non_img_idx])
-            kept_indices_list.append(all_indices_segments[non_img_idx])
-            non_img_idx += 1
-    
-    # 拼接最终结果
-    if pruned_ids_list:  # 检查是否有结果
-        pruned_flat = torch.cat(pruned_ids_list)
-        kept_indices = torch.cat(kept_indices_list)
-    else:
-        pruned_flat = torch.empty(0, dtype=flat_input.dtype, device=flat_input.device)
-        kept_indices = torch.empty(0, dtype=torch.long, device=flat_input.device)
-    
-    # 恢复batch维度
-    pruned_ids = pruned_flat.unsqueeze(0)  # [1, new_seq_len]
-    
-    return pruned_ids, kept_indices
-
-def _update_ids_new(input_ids, image_token_id, retained_nums):
+def _update_ids(input_ids, image_token_id, retained_nums):
     # 确保batch_size=1
     assert input_ids.size(0) == 1, "Batch size must be 1"
     
