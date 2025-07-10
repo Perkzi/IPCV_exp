@@ -5,8 +5,8 @@
 # pruned_layers=(2 3 5)     # ºÙ÷¶≤„ ˝∫Ú—°
 # reduction_ratios=(0.2 0.3 0.5) # —πÀı¬ ∫Ú—°
 
-tasks=("scienceqa_full")
-pruned_layers=(2 5 10)
+tasks=("textvqa")
+pruned_layers=(2 5)
 reduction_ratios=(0.2 0.3)
 
 for task in "${tasks[@]}"; do
@@ -32,14 +32,16 @@ for task in "${tasks[@]}"; do
       max_num_trunction=128
       pivot_image_token=4
       pivot_text_token=4
-      random_choose=False
+      random_choose=True
+      attn_scores_choose=False
+      diff_choose=False
 
       python3 -m accelerate.commands.launch \
-          --num_processes=2 \
+          --num_processes=1 \
           --main_process_port 50008 \
           -m lmms_eval \
           --model qwen2_vl_dart_vit \
-          --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,pruned_layer=$pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose\
+          --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,pruned_layer=$pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose\
           --tasks "${task}" \
           --batch_size 1 \
           --log_samples \

@@ -63,6 +63,8 @@ class Qwen2_VL_DART_ViT(lmms):
         pivot_image_token=4,
         pivot_text_token=4,
         random_choose = False,
+        attn_scores_choose=False,
+        diff_choose = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -105,7 +107,9 @@ class Qwen2_VL_DART_ViT(lmms):
             "reduction_ratio": reduction_ratio,
             "pivot_image_token": pivot_image_token,
             "pivot_text_token": pivot_text_token,
-            "random_choose": random_choose
+            "random_choose": random_choose,
+            "attn_scores_choose":attn_scores_choose,
+            "diff_choose":diff_choose
         }
         configure_DART(self._model, DART_config) # HACK
 
