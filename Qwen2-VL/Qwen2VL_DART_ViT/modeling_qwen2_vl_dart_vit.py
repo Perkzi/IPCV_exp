@@ -306,7 +306,7 @@ class VisionAttention(nn.Module):
         attn_output = attn_output.transpose(0, 1)
         attn_output = attn_output.reshape(seq_length, -1)
         attn_output = self.proj(attn_output)
-        return attn_output
+        return {'attn_output':attn_output,'k_states':k,'attn_scores':attn_weights}
 
 
 class VisionFlashAttention2(nn.Module):
@@ -326,10 +326,10 @@ class VisionFlashAttention2(nn.Module):
 
         max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
         # 修改
-        attn_output, _ , S_dmask = flash_attn_varlen_func(q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen, return_attn_probs=True)
+        attn_output = flash_attn_varlen_func(q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen)
         attn_output = attn_output.reshape(seq_length, -1)
         attn_output = self.proj(attn_output)
-        return {'attn_output':attn_output, 'k_states':k, 'S_dmask':S_dmask} # 修改
+        return {'attn_output':attn_output, 'k_states':k, 'attn_scores':None} # 修改
 
 class VisionSdpaAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int = 16) -> None:
@@ -388,7 +388,7 @@ class Qwen2VLVisionBlock(nn.Module):
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
         return {'hidden_states':hidden_states,
                 'k_states':output['k_states'],
-                'S_dmask':output['S_dmask']}
+                'attn_scores':output['attn_scores']}
 
 # Copied from transformers.models.llama.modeling_llama._prepare_4d_causal_attention_mask_with_cache_position
 def _prepare_4d_causal_attention_mask_with_cache_position(
@@ -1794,12 +1794,16 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
             dim=0, dtype=torch.int32
         )
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0) # [1+总帧数] 记录不同帧图像的始末索引信息
+        device = hidden_states.device
+        dtype = hidden_states.dtype
+        if self.config.DART_config is not None and self.config.DART_config['attn_scores_choose']:
+            self.update_vision_block(device,dtype)
         #--------------------BEGIN------------------------------------
         hidden_states_pkg = {'hidden_states':hidden_states, # [seq_len, embed_dim]
                             'k_states':None,                # [seq_len, num_heads, head_dim]  TODO:优化显存占用
-                            'S_dmask':None}                 # [batch_size, nheads, seqlen, seqlen] TODO:优化显存占用
+                            'attn_scores':None}                 # [nheads,seqlen,seqlen] TODO: 优化显存占用
         frame_counts = 0
-        skip = False
+        hidden_states_prev = None
         for i, blk in enumerate(self.blocks):
             DART_config = self.config.DART_config
             if DART_config is not None :
@@ -1808,27 +1812,26 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                 image_token_length = DART_config['image_token_length']
                 seq_len = hidden_states_pkg['hidden_states'].shape[0]
                 
+                if K-1>0 and blk.layer_idx ==K-1 and DART_config['diff_choose'] and hidden_states_pkg['hidden_states'].shape[0]>1:
+                    hidden_states_prev = hidden_states_pkg['hidden_states'] # K-1层的输入
+
                 if blk.layer_idx == K and hidden_states_pkg['hidden_states'].shape[0]>1:
                     device = hidden_states_pkg['hidden_states'].device
                     last_layer_state = hidden_states_pkg['hidden_states'].detach().clone()
                     last_layer_state = self.norm(last_layer_state)
                     k_states = hidden_states_pkg['k_states']  
-                    S_dmask = hidden_states_pkg['S_dmask']
+                    attn_scores = hidden_states_pkg['attn_scores']
 
                     if DART_config['attn_scores_choose']:
                         retained_image_tokens_index = self.get_retained_image_token_attn_scores(
-                            self.config, last_layer_state, k_states,S_dmask).to(device)
+                            self.config, last_layer_state, k_states,attn_scores).to(device)
                     elif DART_config['random_choose']:
                         # 随机选取
                         retained_image_tokens_index = self.get_retained_image_token_random(
                             self.config, last_layer_state, k_states).to(device)
                     elif DART_config['diff_choose']:
-                        # TODO : 确定裁剪完以后是否还需要通过本层的blk
-                        hidden_states_prev = hidden_states_pkg['hidden_states']
-                        hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
-                        hidden_states_cur = hidden_states_pkg['hidden_states']
+                        hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
                         retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
-                        skip = True
                     else:
                         retained_image_tokens_index = self.get_retained_image_token(
                             self.config, last_layer_state, k_states).to(device)
@@ -1860,10 +1863,8 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     # 更新cu_seqlens
                     cu_seqlens = new_cu_seqlens.to(torch.int32)
         # ------------------------END------------------------------------------
-            if not skip:
-                hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
-            else:
-                skip = False
+            hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
+
         if frame_counts !=0:
             frame_counts = frame_counts/(self.config.spatial_merge_size**2)
 
@@ -1952,7 +1953,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         
         return retained_indices
 
-    def get_retained_image_token_attn_scores (self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor, S_dmask: torch.Tensor) -> torch.Tensor:
+    def get_retained_image_token_attn_scores (self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor, attn_scores: torch.Tensor) -> torch.Tensor:
         # any_state [seq_len, num_heads, head_dim]
         DART_config = config.DART_config
         K = DART_config['K']
@@ -1976,9 +1977,9 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
             TOKEN_TOPK = TOKEN_TOPK_up
         device = last_layer_state.device
 
-        S_dmask.squeeze(0) # [nheads,seqlen,seqlen]
-        S_dmask.sum(dim=-2) # 沿着query维度求和
-        attn_scores = S_dmask.mean(dim=0) # 对不同的注意力头求平均
+        #attn_scores.squeeze(0) # [nheads,seqlen,seqlen]
+        attn_scores = attn_scores.sum(dim=-2) # 沿着query维度求和
+        attn_scores = attn_scores.mean(dim=0) # 对不同的注意力头求平均
         top_k_indices = attn_scores.topk(TOKEN_TOPK).indices
         top_k_real_indices = top_k_indices
         retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device)
@@ -2008,11 +2009,15 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         device = last_layer_state.device
 
         diff = hidden_states_cur - hidden_states_prev # [seqlen,embed_dim]
-        # TODO:计算二者的差值
-        top_k_indices = diff.topk(TOKEN_TOPK).indices
+        diff_norm = torch.norm(diff,dim=-1) # [seqlen]
+        top_k_indices = diff_norm.topk(TOKEN_TOPK).indices
         top_k_real_indices = top_k_indices
         retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device)
         return retained_image_tokens_index
+
+    def update_vision_block(self,device,dtype):
+        self.blocks[ self.config.DART_config['K']-1 ] = Qwen2VLVisionBlock(self.config,self.config.DART_config['K']-1 ,'eager').to(device).to(dtype)
+        return 
 
 class Qwen2RMSNorm_no_param(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):

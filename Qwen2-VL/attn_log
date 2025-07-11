@@ -1,0 +1,25 @@
+========================================
+��ǰ�������:
+Task: mmbench_en
+Pruned Layer: 2
+Reduction Ratio: 0.2
+========================================
+The following values were not passed to `accelerate launch` and had defaults used instead:
+	`--num_machines` was set to a value of `1`
+	`--mixed_precision` was set to a value of `'no'`
+	`--dynamo_backend` was set to a value of `'no'`
+To avoid this warning pass in values for each of the problematic parameters or run `accelerate config`.
+/root/autodl-tmp/ViT-Prunning/Qwen2-VL/transformers/src/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+  warnings.warn(
+[32m2025-07-11 10:30:26.285[0m | [1mINFO    [0m | [36m__main__[0m:[36mcli_evaluate[0m:[36m295[0m - [1mVerbosity set to INFO[0m
+[32m2025-07-11 10:30:28.946[0m | [1mINFO    [0m | [36m__main__[0m:[36mcli_evaluate_single[0m:[36m378[0m - [1mEvaluation tracker args: {'output_path': './logs/Qwen2-VL-7B-Instruct/mmbench_en/pruned_2_ratio_0.2/'}[0m
+[32m2025-07-11 10:30:28.946[0m | [1mINFO    [0m | [36m__main__[0m:[36mcli_evaluate_single[0m:[36m467[0m - [1mSelected Tasks: ['mmbench_en'][0m
+[32m2025-07-11 10:30:28.949[0m | [1mINFO    [0m | [36mlmms_eval.evaluator[0m:[36msimple_evaluate[0m:[36m155[0m - [1mSetting random seed to 0 | Setting numpy seed to 1234 | Setting torch manual seed to 1234[0m
+You are attempting to use Flash Attention 2.0 without specifying a torch dtype. This might lead to unexpected behaviour
+Loading checkpoint shards:   0%|          | 0/5 [00:00<?, ?it/s]Loading checkpoint shards:  20%|██        | 1/5 [00:02<00:09,  2.26s/it]Loading checkpoint shards:  40%|████      | 2/5 [00:03<00:05,  1.83s/it]Loading checkpoint shards:  60%|██████    | 3/5 [00:05<00:03,  1.70s/it]Loading checkpoint shards:  80%|████████  | 4/5 [00:06<00:01,  1.64s/it]Loading checkpoint shards: 100%|██████████| 5/5 [00:07<00:00,  1.25s/it]Loading checkpoint shards: 100%|██████████| 5/5 [00:07<00:00,  1.49s/it]
+[32m2025-07-11 10:30:53.125[0m | [1mINFO    [0m | [36mlmms_eval.api.task[0m:[36mbuild_all_requests[0m:[36m425[0m - [1mBuilding contexts for mmbench_en_dev on rank 0...[0m
+  0%|          | 0/4329 [00:00<?, ?it/s] 16%|█▌        | 672/4329 [00:00<00:00, 6712.24it/s] 33%|███▎      | 1444/4329 [00:00<00:00, 7304.17it/s] 51%|█████     | 2213/4329 [00:00<00:00, 7478.12it/s] 69%|██████▉   | 2982/4329 [00:00<00:00, 7560.99it/s] 87%|████████▋ | 3765/4329 [00:00<00:00, 7655.91it/s]100%|██████████| 4329/4329 [00:00<00:00, 7532.58it/s]
+[32m2025-07-11 10:30:53.703[0m | [1mINFO    [0m | [36mlmms_eval.api.task[0m:[36mbuild_all_requests[0m:[36m425[0m - [1mBuilding contexts for mmbench_en_test on rank 0...[0m
+  0%|          | 0/6666 [00:00<?, ?it/s] 10%|█         | 695/6666 [00:00<00:00, 6944.96it/s] 22%|██▏       | 1476/6666 [00:00<00:00, 7451.31it/s] 34%|███▍      | 2264/6666 [00:00<00:00, 7643.88it/s] 46%|████▌     | 3056/6666 [00:00<00:00, 7747.90it/s] 58%|█████▊    | 3841/6666 [00:00<00:00, 7783.62it/s] 69%|██████▉   | 4629/6666 [00:00<00:00, 7813.79it/s] 81%|████████▏ | 5419/6666 [00:00<00:00, 7840.04it/s] 93%|█████████▎| 6206/6666 [00:00<00:00, 7845.81it/s]100%|██████████| 6666/6666 [00:00<00:00, 7576.70it/s]
+[32m2025-07-11 10:30:54.590[0m | [1mINFO    [0m | [36mlmms_eval.evaluator[0m:[36mevaluate[0m:[36m447[0m - [1mRunning generate_until requests[0m
+Model Responding:   0%|          | 0/10995 [00:00<?, ?it/s]
