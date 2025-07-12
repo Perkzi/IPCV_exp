@@ -5,9 +5,9 @@
 # pruned_layers=(2 3 5)     # 剪枝层数候选
 # reduction_ratios=(0.2 0.3 0.5) # 压缩率候选
 
-tasks=("mmbench_en" "textvqa")
-pruned_layers=(2 5)
-reduction_ratios=(0.2 0.3)
+tasks=("mmbench_en")
+pruned_layers=(2)
+reduction_ratios=(0)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -15,7 +15,7 @@ for task in "${tasks[@]}"; do
       
       # 打印当前参数组合
       echo "========================================"
-      echo "当前参数组合:"
+      echo "Current param group:"
       echo "Task: $task"
       echo "Pruned Layer: $pruned_layer"
       echo "Reduction Ratio: $reduction_ratio"
@@ -32,8 +32,8 @@ for task in "${tasks[@]}"; do
       max_num_trunction=128
       pivot_image_token=4
       pivot_text_token=4
-      random_choose=False
-      attn_scores_choose=True
+      random_choose=True
+      attn_scores_choose=False
       diff_choose=False
 
       python3 -m accelerate.commands.launch \

@@ -53,6 +53,7 @@ from transformers.utils import (
 from .configuration_qwen2_vl_dart_vit import Qwen2VLConfig, Qwen2VLVisionConfig
 
 import time
+import gc
 
 
 if is_flash_attn_2_available():
@@ -299,7 +300,9 @@ class VisionAttention(nn.Module):
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
+        print("CUDA memory allocated before attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
         attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(self.head_dim)
+        print("CUDA memory allocated after attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
         attn_weights = attn_weights + attention_mask
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
         attn_output = torch.matmul(attn_weights, v)
@@ -1825,6 +1828,12 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     if DART_config['attn_scores_choose']:
                         retained_image_tokens_index = self.get_retained_image_token_attn_scores(
                             self.config, last_layer_state, k_states,attn_scores).to(device)
+                        del hidden_states_pkg['attn_scores']
+                        del attn_scores
+                        torch.cuda.synchronize()
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
                     elif DART_config['random_choose']:
                         # 随机选取
                         retained_image_tokens_index = self.get_retained_image_token_random(
@@ -1888,10 +1897,13 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         # 向上取4的倍数
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
         # 选择与原始值更接近的结果
-        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            TOKEN_TOPK = TOKEN_TOPK_down
-        else:
-            TOKEN_TOPK = TOKEN_TOPK_up
+        # if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
+        #     TOKEN_TOPK = TOKEN_TOPK_down-1
+        # else:
+        #     TOKEN_TOPK = TOKEN_TOPK_up-1
+        # 向下取
+        TOKEN_TOPK = TOKEN_TOPK_down - 1
+        device = last_layer_state.device
 
         device = last_layer_state.device
 
@@ -1940,10 +1952,12 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         # 向上取4的倍数
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
         # 选择与原始值更接近的结果
-        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            retained_count = TOKEN_TOPK_down
-        else:
-            retained_count = TOKEN_TOPK_up
+        # if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
+        #     retained_count = TOKEN_TOPK_down-1
+        # else:
+        #     retained_count = TOKEN_TOPK_up-1
+        # 向下取
+        retained_count = TOKEN_TOPK_down
         # 确保至少保留一个token
         retained_count = max(retained_count, 1)
         
@@ -1972,9 +1986,9 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
         # 选择与原始值更接近的结果
         if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            TOKEN_TOPK = TOKEN_TOPK_down
+            TOKEN_TOPK = TOKEN_TOPK_down-1
         else:
-            TOKEN_TOPK = TOKEN_TOPK_up
+            TOKEN_TOPK = TOKEN_TOPK_up-1
         device = last_layer_state.device
 
         #attn_scores.squeeze(0) # [nheads,seqlen,seqlen]
@@ -2003,10 +2017,12 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
         # 选择与原始值更接近的结果
         if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            TOKEN_TOPK = TOKEN_TOPK_down
+            TOKEN_TOPK = TOKEN_TOPK_down-1
         else:
-            TOKEN_TOPK = TOKEN_TOPK_up
-        device = last_layer_state.device
+            TOKEN_TOPK = TOKEN_TOPK_up-1
+        # # 向下取
+        # TOKEN_TOPK = TOKEN_TOPK_down - 1
+        # device = last_layer_state.device
 
         diff = hidden_states_cur - hidden_states_prev # [seqlen,embed_dim]
         diff_norm = torch.norm(diff,dim=-1) # [seqlen]
@@ -2014,9 +2030,28 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         top_k_real_indices = top_k_indices
         retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device)
         return retained_image_tokens_index
-
-    def update_vision_block(self,device,dtype):
-        self.blocks[ self.config.DART_config['K']-1 ] = Qwen2VLVisionBlock(self.config,self.config.DART_config['K']-1 ,'eager').to(device).to(dtype)
+    
+    def update_vision_block(self, device, dtype):
+        # 获取需要替换的层索引
+        k = self.config.DART_config['K'] - 1
+        if k<0 : return 
+        # 旧 block
+        old_block = self.blocks[k]
+        # 创建新 block，使用 'eager' 注意力实现
+        new_block = Qwen2VLVisionBlock(
+            self.config,
+            layer_idx=k,
+            attn_implementation='eager'
+        ).to(device=device, dtype=dtype)
+        # 尝试复制参数（尽可能匹配）
+        missing_keys, unexpected_keys = new_block.load_state_dict(
+            old_block.state_dict(),
+            strict=False  # 允许注意力实现不同导致的权重不匹配
+        )
+        # print(f"Missing keys: {missing_keys}")       # 应该只包含与注意力实现相关的键
+        # print(f"Unexpected keys: {unexpected_keys}") # 应该为空或只包含预期的键
+        # 替换 block
+        self.blocks[k] = new_block
         return 
 
 class Qwen2RMSNorm_no_param(nn.Module):
