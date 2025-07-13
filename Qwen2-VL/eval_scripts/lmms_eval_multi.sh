@@ -32,8 +32,8 @@ for task in "${tasks[@]}"; do
       max_num_trunction=128
       pivot_image_token=4
       pivot_text_token=4
-      random_choose=True
-      attn_scores_choose=False
+      random_choose=False
+      attn_scores_choose=True
       diff_choose=False
 
       python3 -m accelerate.commands.launch \

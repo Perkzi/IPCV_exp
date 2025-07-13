@@ -32,4 +32,4 @@ ckpts*
 !.devcontainer/*
 
 # Demo
-serve_images/
+serve_images/flash_attn-*.whl

@@ -263,7 +263,7 @@ class PatchMerger(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.mlp(self.ln_q(x).view(-1, self.hidden_size))
-        return x # ÌØÕ÷Î¬¶È´Óembed_dim -> hidden_dim 
+        return x # ç‰¹å¾ç»´åº¦ä»embed_dim -> hidden_dim 
 
 
 class VisionMlp(nn.Module):
@@ -328,11 +328,11 @@ class VisionFlashAttention2(nn.Module):
         k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0) #[seqlen, num_heads, head_dim]
 
         max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
-        # ĞŞ¸Ä
+        # ä¿®æ”¹
         attn_output = flash_attn_varlen_func(q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen)
         attn_output = attn_output.reshape(seq_length, -1)
         attn_output = self.proj(attn_output)
-        return {'attn_output':attn_output, 'k_states':k, 'attn_scores':None} # ĞŞ¸Ä
+        return {'attn_output':attn_output, 'k_states':k, 'attn_scores':None} # ä¿®æ”¹
 
 class VisionSdpaAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int = 16) -> None:
@@ -1051,7 +1051,7 @@ class Qwen2VisionTransformerPretrainedModel(Qwen2VLPreTrainedModel):
         cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
             dim=0, dtype=torch.int32
         )
-        cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0) # [2] ĞòÁĞ±ßÔµ£¬ÆğÊ¼ºÍ½áÎ²
+        cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0) # [2] åºåˆ—è¾¹ç¼˜ï¼Œèµ·å§‹å’Œç»“å°¾
 
         for blk in self.blocks:
             hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
@@ -1617,7 +1617,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 # time_vit_start = time.time()
                 # num_tokens_prev = input_ids.shape[1]
                 pixel_values = pixel_values.type(self.visual.get_dtype())
-                image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_lenÎª(image tokens)//spatial_merge_size**2
+                image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_lenä¸º(image tokens)//spatial_merge_size**2
                 # time_vit_end = time.time()
                 #print("time_cost_vit", time_vit_end - time_vit_start)
                 image_embeds.to(inputs_embeds.device)
@@ -1625,7 +1625,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 # image_mask = input_ids == self.config.image_token_id # [batch_size, seq_len]
                 image_mask = input_ids_new == self.config.image_token_id
                 inputs_embeds = inputs_embeds[:,retained_indices,:]
-                # inputs_embeds = inputs_embeds.index_select(1, retained_indices.to(device=inputs_embeds.device)).contiguous() # TODO:ÑéÖ¤ÊÇ·ñÎªÔ­µØ²Ù×÷
+                # inputs_embeds = inputs_embeds.index_select(1, retained_indices.to(device=inputs_embeds.device)).contiguous() # TODO:éªŒè¯æ˜¯å¦ä¸ºåŸåœ°æ“ä½œ
                 #print("CUDA memory after prunning inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
                 if self.training:
                     inputs_embeds = inputs_embeds.clone()
@@ -1790,21 +1790,21 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         # hidden_states [grid_t * grid_h * grid_w, 
         #       channel * self.temporal_patch_size * self.patch_size * self.patch_size] 
         # grid_thw[batch_size, 3(t,h,w)]
-        hidden_states = self.patch_embed(hidden_states) # [seq_len, embed_dim], ½ö¸Ä±äµÚÒ»Î¬£¬×öÌØÕ÷Î¬¶ÈµÄÓ³Éä
+        hidden_states = self.patch_embed(hidden_states) # [seq_len, embed_dim], ä»…æ”¹å˜ç¬¬ä¸€ç»´ï¼Œåšç‰¹å¾ç»´åº¦çš„æ˜ å°„
         rotary_pos_emb = self.rot_pos_emb(grid_thw) # [seq_len, rot_pos_embed_dim]
 
         cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
             dim=0, dtype=torch.int32
         )
-        cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0) # [1+×ÜÖ¡Êı] ¼ÇÂ¼²»Í¬Ö¡Í¼ÏñµÄÊ¼Ä©Ë÷ÒıĞÅÏ¢
+        cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0) # [1+æ€»å¸§æ•°] è®°å½•ä¸åŒå¸§å›¾åƒçš„å§‹æœ«ç´¢å¼•ä¿¡æ¯
         device = hidden_states.device
         dtype = hidden_states.dtype
         if self.config.DART_config is not None and self.config.DART_config['attn_scores_choose']:
             self.update_vision_block(device,dtype)
         #--------------------BEGIN------------------------------------
         hidden_states_pkg = {'hidden_states':hidden_states, # [seq_len, embed_dim]
-                            'k_states':None,                # [seq_len, num_heads, head_dim]  TODO:ÓÅ»¯ÏÔ´æÕ¼ÓÃ
-                            'attn_scores':None}                 # [nheads,seqlen,seqlen] TODO: ÓÅ»¯ÏÔ´æÕ¼ÓÃ
+                            'k_states':None,                # [seq_len, num_heads, head_dim]  TODO:ä¼˜åŒ–æ˜¾å­˜å ç”¨
+                            'attn_scores':None}                 # [nheads,seqlen,seqlen] TODO: ä¼˜åŒ–æ˜¾å­˜å ç”¨
         frame_counts = 0
         hidden_states_prev = None
         for i, blk in enumerate(self.blocks):
@@ -1816,7 +1816,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                 seq_len = hidden_states_pkg['hidden_states'].shape[0]
                 
                 if K-1>0 and blk.layer_idx ==K-1 and DART_config['diff_choose'] and hidden_states_pkg['hidden_states'].shape[0]>1:
-                    hidden_states_prev = hidden_states_pkg['hidden_states'] # K-1²ãµÄÊäÈë
+                    hidden_states_prev = hidden_states_pkg['hidden_states'] # K-1å±‚çš„è¾“å…¥
 
                 if blk.layer_idx == K and hidden_states_pkg['hidden_states'].shape[0]>1:
                     device = hidden_states_pkg['hidden_states'].device
@@ -1835,11 +1835,11 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                         torch.cuda.empty_cache()
                         print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
                     elif DART_config['random_choose']:
-                        # Ëæ»úÑ¡È¡
+                        # éšæœºé€‰å–
                         retained_image_tokens_index = self.get_retained_image_token_random(
                             self.config, last_layer_state, k_states).to(device)
                     elif DART_config['diff_choose']:
-                        hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1²ãµÄÊä³ö£¬¼´K²ãµÄÊäÈë
+                        hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1å±‚çš„è¾“å‡ºï¼Œå³Kå±‚çš„è¾“å…¥
                         retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
                     else:
                         retained_image_tokens_index = self.get_retained_image_token(
@@ -1853,23 +1853,23 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     hidden_states_pkg['hidden_states'] = hidden_states_pkg['hidden_states'][keep_indexs,:]
                     rotary_pos_emb = rotary_pos_emb[keep_indexs,:]
 
-                    # ¸üĞÂcu_seqlens²¢¼ÆËãÃ¿Ö¡imgµÄ²Ã¼ôratio
-                    num_frames = len(cu_seqlens) - 1  # Í¼Ïñ×ÜÖ¡Êı
-                    # ¸ü¸ßĞ§µØ¼ÆËãÃ¿Ö¡±£ÁôµÄtokenÊıÁ¿
+                    # æ›´æ–°cu_seqlenså¹¶è®¡ç®—æ¯å¸§imgçš„è£å‰ªratio
+                    num_frames = len(cu_seqlens) - 1  # å›¾åƒæ€»å¸§æ•°
+                    # æ›´é«˜æ•ˆåœ°è®¡ç®—æ¯å¸§ä¿ç•™çš„tokenæ•°é‡
                     frame_counts = torch.zeros(num_frames, dtype=torch.int32, device=device)
-                    # ÎªÃ¿¸ö±£ÁôË÷ÒıÕÒµ½ËùÊôµÄÖ¡
-                    # Ê¹ÓÃsearchsortedÕÒµ½Ã¿¸ökeep_indexsËùÊôµÄÖ¡Çø¼ä
+                    # ä¸ºæ¯ä¸ªä¿ç•™ç´¢å¼•æ‰¾åˆ°æ‰€å±çš„å¸§
+                    # ä½¿ç”¨searchsortedæ‰¾åˆ°æ¯ä¸ªkeep_indexsæ‰€å±çš„å¸§åŒºé—´
                     frame_indices = torch.searchsorted(cu_seqlens, keep_indexs, right=False) - 1
-                    # È·±£Ë÷ÒıÔÚÓĞĞ§·¶Î§ÄÚ
+                    # ç¡®ä¿ç´¢å¼•åœ¨æœ‰æ•ˆèŒƒå›´å†…
                     frame_indices = frame_indices.clamp(min=0, max=num_frames-1)
-                    # Í³¼ÆÃ¿Ö¡±£ÁôµÄtokenÊıÁ¿
+                    # ç»Ÿè®¡æ¯å¸§ä¿ç•™çš„tokenæ•°é‡
                     frame_counts = torch.bincount(frame_indices, minlength=num_frames)
-                    # ¼ÆËãĞÂµÄcu_seqlens
+                    # è®¡ç®—æ–°çš„cu_seqlens
                     new_cu_seqlens = torch.zeros(len(cu_seqlens), dtype=torch.int32, device=device)
                     new_cu_seqlens[0] = 0
                     new_cu_seqlens[1:] = frame_counts.cumsum(dim=0)
                     new_cu_seqlens = new_cu_seqlens.cumsum(dim=0)
-                    # ¸üĞÂcu_seqlens
+                    # æ›´æ–°cu_seqlens
                     cu_seqlens = new_cu_seqlens.to(torch.int32)
         # ------------------------END------------------------------------------
             hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
@@ -1890,18 +1890,18 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         pivot_text_token = DART_config['pivot_text_token']
 
         reduction_ratio = DART_config['reduction_ratio']
-        # ¼ÆËãÔ­Ê¼Öµ
+        # è®¡ç®—åŸå§‹å€¼
         TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
-        # ÏòÏÂÈ¡4µÄ±¶Êı
+        # å‘ä¸‹å–4çš„å€æ•°
         TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
-        # ÏòÉÏÈ¡4µÄ±¶Êı
+        # å‘ä¸Šå–4çš„å€æ•°
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
-        # Ñ¡ÔñÓëÔ­Ê¼Öµ¸ü½Ó½üµÄ½á¹û
+        # é€‰æ‹©ä¸åŸå§‹å€¼æ›´æ¥è¿‘çš„ç»“æœ
         # if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
         #     TOKEN_TOPK = TOKEN_TOPK_down-1
         # else:
         #     TOKEN_TOPK = TOKEN_TOPK_up-1
-        # ÏòÏÂÈ¡
+        # å‘ä¸‹å–
         TOKEN_TOPK = TOKEN_TOPK_down - 1
         device = last_layer_state.device
 
@@ -1924,11 +1924,11 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
 
         valid_indices_list = list(valid_indices)
         for item in list(indices_set):
-            valid_vectors = last_layer_state[valid_indices_list, :] # last_layer_stateÖĞ´ı´¦Àíimage tokenµÄ¶ÔÓ¦ÏòÁ¿ [valid_seq_len - num_pivot_tokens, hidden_dim]
-            cos_sim = -torch.nn.functional.cosine_similarity(last_layer_state[item, :], valid_vectors, dim=-1) # ¼ÆËãÓàÏÒÏàËÆ¶È [valid_seq_len - num_pivot_tokens]
+            valid_vectors = last_layer_state[valid_indices_list, :] # last_layer_stateä¸­å¾…å¤„ç†image tokençš„å¯¹åº”å‘é‡ [valid_seq_len - num_pivot_tokens, hidden_dim]
+            cos_sim = -torch.nn.functional.cosine_similarity(last_layer_state[item, :], valid_vectors, dim=-1) # è®¡ç®—ä½™å¼¦ç›¸ä¼¼åº¦ [valid_seq_len - num_pivot_tokens]
             top_k_indices = cos_sim.topk(TOKEN_TOPK).indices
 
-            top_k_real_indices = [valid_indices_list[i] for i in top_k_indices] # ´ı±£ÁôµÄimage tokenµÄindex
+            top_k_real_indices = [valid_indices_list[i] for i in top_k_indices] # å¾…ä¿ç•™çš„image tokençš„index
             indices_set.update(top_k_real_indices)
 
             valid_indices.difference_update(top_k_real_indices)
@@ -1945,23 +1945,23 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         image_token_length = last_layer_state.shape[0]
         device = last_layer_state.device
 
-        # ¼ÆËãÔ­Ê¼Öµ
+        # è®¡ç®—åŸå§‹å€¼
         TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
-        # ÏòÏÂÈ¡4µÄ±¶Êı
+        # å‘ä¸‹å–4çš„å€æ•°
         TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
-        # ÏòÉÏÈ¡4µÄ±¶Êı
+        # å‘ä¸Šå–4çš„å€æ•°
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
-        # Ñ¡ÔñÓëÔ­Ê¼Öµ¸ü½Ó½üµÄ½á¹û
+        # é€‰æ‹©ä¸åŸå§‹å€¼æ›´æ¥è¿‘çš„ç»“æœ
         # if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
         #     retained_count = TOKEN_TOPK_down-1
         # else:
         #     retained_count = TOKEN_TOPK_up-1
-        # ÏòÏÂÈ¡
+        # å‘ä¸‹å–
         retained_count = TOKEN_TOPK_down
-        # È·±£ÖÁÉÙ±£ÁôÒ»¸ötoken
+        # ç¡®ä¿è‡³å°‘ä¿ç•™ä¸€ä¸ªtoken
         retained_count = max(retained_count, 1)
         
-        # Éú³ÉËùÓĞÍ¼ÏñtokenµÄË÷Òı²¢Ëæ»úÑ¡Ôñ
+        # ç”Ÿæˆæ‰€æœ‰å›¾åƒtokençš„ç´¢å¼•å¹¶éšæœºé€‰æ‹©
         all_indices = torch.arange(image_token_start_index, image_token_start_index + image_token_length, device=device)
         retained_indices = all_indices[torch.randperm(all_indices.size(0))[:retained_count]]
         
@@ -1978,13 +1978,13 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         pivot_text_token = DART_config['pivot_text_token']
 
         reduction_ratio = DART_config['reduction_ratio']
-        # ¼ÆËãÔ­Ê¼Öµ
+        # è®¡ç®—åŸå§‹å€¼
         TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
-        # ÏòÏÂÈ¡4µÄ±¶Êı
+        # å‘ä¸‹å–4çš„å€æ•°
         TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
-        # ÏòÉÏÈ¡4µÄ±¶Êı
+        # å‘ä¸Šå–4çš„å€æ•°
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
-        # Ñ¡ÔñÓëÔ­Ê¼Öµ¸ü½Ó½üµÄ½á¹û
+        # é€‰æ‹©ä¸åŸå§‹å€¼æ›´æ¥è¿‘çš„ç»“æœ
         if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
             TOKEN_TOPK = TOKEN_TOPK_down-1
         else:
@@ -1992,8 +1992,8 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         device = last_layer_state.device
 
         #attn_scores.squeeze(0) # [nheads,seqlen,seqlen]
-        attn_scores = attn_scores.sum(dim=-2) # ÑØ×ÅqueryÎ¬¶ÈÇóºÍ
-        attn_scores = attn_scores.mean(dim=0) # ¶Ô²»Í¬µÄ×¢ÒâÁ¦Í·ÇóÆ½¾ù
+        attn_scores = attn_scores.sum(dim=-2) # æ²¿ç€queryç»´åº¦æ±‚å’Œ
+        attn_scores = attn_scores.mean(dim=0) # å¯¹ä¸åŒçš„æ³¨æ„åŠ›å¤´æ±‚å¹³å‡
         top_k_indices = attn_scores.topk(TOKEN_TOPK).indices
         top_k_real_indices = top_k_indices
         retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device)
@@ -2009,18 +2009,18 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         pivot_text_token = DART_config['pivot_text_token']
 
         reduction_ratio = DART_config['reduction_ratio']
-        # ¼ÆËãÔ­Ê¼Öµ
+        # è®¡ç®—åŸå§‹å€¼
         TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
-        # ÏòÏÂÈ¡4µÄ±¶Êı
+        # å‘ä¸‹å–4çš„å€æ•°
         TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
-        # ÏòÉÏÈ¡4µÄ±¶Êı
+        # å‘ä¸Šå–4çš„å€æ•°
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
-        # Ñ¡ÔñÓëÔ­Ê¼Öµ¸ü½Ó½üµÄ½á¹û
+        # é€‰æ‹©ä¸åŸå§‹å€¼æ›´æ¥è¿‘çš„ç»“æœ
         if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
             TOKEN_TOPK = TOKEN_TOPK_down-1
         else:
             TOKEN_TOPK = TOKEN_TOPK_up-1
-        # # ÏòÏÂÈ¡
+        # # å‘ä¸‹å–
         # TOKEN_TOPK = TOKEN_TOPK_down - 1
         # device = last_layer_state.device
 
@@ -2032,25 +2032,25 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         return retained_image_tokens_index
     
     def update_vision_block(self, device, dtype):
-        # »ñÈ¡ĞèÒªÌæ»»µÄ²ãË÷Òı
+        # è·å–éœ€è¦æ›¿æ¢çš„å±‚ç´¢å¼•
         k = self.config.DART_config['K'] - 1
         if k<0 : return 
-        # ¾É block
+        # æ—§ block
         old_block = self.blocks[k]
-        # ´´½¨ĞÂ block£¬Ê¹ÓÃ 'eager' ×¢ÒâÁ¦ÊµÏÖ
+        # åˆ›å»ºæ–° blockï¼Œä½¿ç”¨ 'eager' æ³¨æ„åŠ›å®ç°
         new_block = Qwen2VLVisionBlock(
             self.config,
             layer_idx=k,
             attn_implementation='eager'
         ).to(device=device, dtype=dtype)
-        # ³¢ÊÔ¸´ÖÆ²ÎÊı£¨¾¡¿ÉÄÜÆ¥Åä£©
+        # å°è¯•å¤åˆ¶å‚æ•°ï¼ˆå°½å¯èƒ½åŒ¹é…ï¼‰
         missing_keys, unexpected_keys = new_block.load_state_dict(
             old_block.state_dict(),
-            strict=False  # ÔÊĞí×¢ÒâÁ¦ÊµÏÖ²»Í¬µ¼ÖÂµÄÈ¨ÖØ²»Æ¥Åä
+            strict=False  # å…è®¸æ³¨æ„åŠ›å®ç°ä¸åŒå¯¼è‡´çš„æƒé‡ä¸åŒ¹é…
         )
-        # print(f"Missing keys: {missing_keys}")       # Ó¦¸ÃÖ»°üº¬Óë×¢ÒâÁ¦ÊµÏÖÏà¹ØµÄ¼ü
-        # print(f"Unexpected keys: {unexpected_keys}") # Ó¦¸ÃÎª¿Õ»òÖ»°üº¬Ô¤ÆÚµÄ¼ü
-        # Ìæ»» block
+        # print(f"Missing keys: {missing_keys}")       # åº”è¯¥åªåŒ…å«ä¸æ³¨æ„åŠ›å®ç°ç›¸å…³çš„é”®
+        # print(f"Unexpected keys: {unexpected_keys}") # åº”è¯¥ä¸ºç©ºæˆ–åªåŒ…å«é¢„æœŸçš„é”®
+        # æ›¿æ¢ block
         self.blocks[k] = new_block
         return 
 
@@ -2065,54 +2065,54 @@ class Qwen2RMSNorm_no_param(nn.Module):
 
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
-        # ×ªÎª float32 ±£Ö¤ÊıÖµÎÈ¶¨ĞÔ
+        # è½¬ä¸º float32 ä¿è¯æ•°å€¼ç¨³å®šæ€§
         hidden_states = hidden_states.to(torch.float32)
-        # ¼ÆËã¾ù·½Öµ£¨RMS£©
+        # è®¡ç®—å‡æ–¹å€¼ï¼ˆRMSï¼‰
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        # ¹éÒ»»¯
+        # å½’ä¸€åŒ–
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        # »Ö¸´Ô­Ê¼Êı¾İÀàĞÍ
+        # æ¢å¤åŸå§‹æ•°æ®ç±»å‹
         return hidden_states.to(input_dtype)
 
     def extra_repr(self):
         return f"eps={self.variance_epsilon}"
 
 def _update_ids(input_ids, image_token_id, retained_nums):
-    # È·±£batch_size=1
+    # ç¡®ä¿batch_size=1
     assert input_ids.size(0) == 1, "Batch size must be 1"
     
-    seq = input_ids[0]  # »ñÈ¡ĞòÁĞ [seq_len]
-    new_tokens = []     # ´æ´¢ĞÂĞòÁĞµÄtoken
-    indices = []        # ´æ´¢ĞÂĞòÁĞ¶ÔÓ¦µÄÔ­Ê¼Ë÷Òı
-    img_segment_idx = 0 # µ±Ç°´¦ÀíµÄÍ¼Ïñ¶ÎË÷Òı
+    seq = input_ids[0]  # è·å–åºåˆ— [seq_len]
+    new_tokens = []     # å­˜å‚¨æ–°åºåˆ—çš„token
+    indices = []        # å­˜å‚¨æ–°åºåˆ—å¯¹åº”çš„åŸå§‹ç´¢å¼•
+    img_segment_idx = 0 # å½“å‰å¤„ç†çš„å›¾åƒæ®µç´¢å¼•
     retained_nums = torch.tensor(retained_nums, dtype = torch.int32, device = input_ids.device)
     
     i = 0
     while i < len(seq):
         if seq[i] != image_token_id:
-            # ·ÇÍ¼Ïñ±ê¼Ç£ºÖ±½Ó±£Áô
+            # éå›¾åƒæ ‡è®°ï¼šç›´æ¥ä¿ç•™
             new_tokens.append(seq[i].item())
             indices.append(i)
             i += 1
         else:
-            # ·¢ÏÖÍ¼Ïñ±ê¼Ç¶Î£º¼ÆËãÁ¬ĞøÍ¼Ïñ±ê¼ÇµÄ³¤¶È
+            # å‘ç°å›¾åƒæ ‡è®°æ®µï¼šè®¡ç®—è¿ç»­å›¾åƒæ ‡è®°çš„é•¿åº¦
             start_idx = i
             while i < len(seq) and seq[i] == image_token_id:
                 i += 1
             segment_len = i - start_idx
             
-            # »ñÈ¡¸Ã¶ÎĞèÒª±£ÁôµÄÊıÁ¿
+            # è·å–è¯¥æ®µéœ€è¦ä¿ç•™çš„æ•°é‡
             retain_num = retained_nums[img_segment_idx] if img_segment_idx < len(retained_nums) else segment_len
-            retain_num = min(retain_num, segment_len)  # È·±£²»³¬¹ıÊµ¼Ê³¤¶È
+            retain_num = min(retain_num, segment_len)  # ç¡®ä¿ä¸è¶…è¿‡å®é™…é•¿åº¦
             
-            # ±£ÁôÇ°retain_num¸öÍ¼Ïñ±ê¼Ç
+            # ä¿ç•™å‰retain_numä¸ªå›¾åƒæ ‡è®°
             for j in range(retain_num):
                 new_tokens.append(image_token_id)
                 indices.append(start_idx + j)
             
             img_segment_idx += 1
     
-    # ×ª»»ÎªÕÅÁ¿
+    # è½¬æ¢ä¸ºå¼ é‡
     new_input_ids = torch.tensor([new_tokens], dtype=torch.long)  # [1, new_seq_len]
     indices = torch.tensor(indices, dtype=torch.long)             # [new_seq_len]
     
