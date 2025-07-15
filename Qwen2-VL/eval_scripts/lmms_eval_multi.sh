@@ -1,19 +1,19 @@
 #!/bin/bash
 
-# ²ÎÊýÅäÖÃÇøÓò
-# tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "textvqa")  # Ê¾ÀýÈÎÎñÁÐ±í
-# pruned_layers=(2 3 5)     # ¼ôÖ¦²ãÊýºòÑ¡
-# reduction_ratios=(0.2 0.3 0.5) # Ñ¹ËõÂÊºòÑ¡
+# ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+# tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "textvqa")  # Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð±ï¿½
+# pruned_layers=(2 3 5)     # ï¿½ï¿½Ö¦ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¡
+# reduction_ratios=(0.2 0.3 0.5) # Ñ¹ï¿½ï¿½ï¿½Êºï¿½Ñ¡
 
 tasks=("mmbench_en")
 pruned_layers=(2)
-reduction_ratios=(0)
+reduction_ratios=(0.2)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
     for reduction_ratio in "${reduction_ratios[@]}"; do
       
-      # ´òÓ¡µ±Ç°²ÎÊý×éºÏ
+      # ï¿½ï¿½Ó¡ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
       echo "========================================"
       echo "Current param group:"
       echo "Task: $task"
@@ -33,21 +33,22 @@ for task in "${tasks[@]}"; do
       pivot_image_token=4
       pivot_text_token=4
       random_choose=False
-      attn_scores_choose=True
+      attn_scores_choose=False
       diff_choose=False
+      pivot_sim_choose=True
 
       python3 -m accelerate.commands.launch \
           --num_processes=1 \
           --main_process_port 50008 \
           -m lmms_eval \
           --model qwen2_vl_dart_vit \
-          --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,pruned_layer=$pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose\
+          --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,pruned_layer=$pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose \
           --tasks "${task}" \
           --batch_size 1 \
           --log_samples \
           --output_path "$output_path"
 
-      # Ìí¼Ó¼ä¸ôÊ±¼ä±ÜÃâ¶Ë¿Ú³åÍ»
+      # ï¿½ï¿½ï¿½Ó¼ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½Ë¿Ú³ï¿½Í»
       sleep 10
     done
   done

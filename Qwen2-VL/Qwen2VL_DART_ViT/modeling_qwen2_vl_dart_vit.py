@@ -1833,13 +1833,15 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                         torch.cuda.synchronize()
                         gc.collect()
                         torch.cuda.empty_cache()
-                        print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
+                        # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
                     elif DART_config['random_choose']:
                         # 随机选取
                         retained_image_tokens_index = self.get_retained_image_token_random(
                             self.config, last_layer_state, k_states).to(device)
                     elif DART_config['diff_choose']:
                         hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
+                        retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+                    elif DART_config['pivot_sim_choose']:
                         retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
                     else:
                         retained_image_tokens_index = self.get_retained_image_token(
@@ -1897,12 +1899,12 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         # 向上取4的倍数
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
         # 选择与原始值更接近的结果
-        # if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-        #     TOKEN_TOPK = TOKEN_TOPK_down-1
-        # else:
-        #     TOKEN_TOPK = TOKEN_TOPK_up-1
+        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
+            TOKEN_TOPK = TOKEN_TOPK_down
+        else:
+            TOKEN_TOPK = TOKEN_TOPK_up
         # 向下取
-        TOKEN_TOPK = TOKEN_TOPK_down - 1
+        # TOKEN_TOPK = TOKEN_TOPK_down - 1
         device = last_layer_state.device
 
         device = last_layer_state.device
@@ -1952,12 +1954,12 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         # 向上取4的倍数
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
         # 选择与原始值更接近的结果
-        # if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-        #     retained_count = TOKEN_TOPK_down-1
-        # else:
-        #     retained_count = TOKEN_TOPK_up-1
+        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
+            retained_count = TOKEN_TOPK_down
+        else:
+            retained_count = TOKEN_TOPK_up
         # 向下取
-        retained_count = TOKEN_TOPK_down
+        # retained_count = TOKEN_TOPK_down
         # 确保至少保留一个token
         retained_count = max(retained_count, 1)
         
@@ -1986,9 +1988,9 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
         # 选择与原始值更接近的结果
         if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            TOKEN_TOPK = TOKEN_TOPK_down-1
+            TOKEN_TOPK = TOKEN_TOPK_down
         else:
-            TOKEN_TOPK = TOKEN_TOPK_up-1
+            TOKEN_TOPK = TOKEN_TOPK_up
         device = last_layer_state.device
 
         #attn_scores.squeeze(0) # [nheads,seqlen,seqlen]
@@ -2017,16 +2019,46 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
         # 选择与原始值更接近的结果
         if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            TOKEN_TOPK = TOKEN_TOPK_down-1
+            TOKEN_TOPK = TOKEN_TOPK_down
         else:
-            TOKEN_TOPK = TOKEN_TOPK_up-1
+            TOKEN_TOPK = TOKEN_TOPK_up
         # # 向下取
         # TOKEN_TOPK = TOKEN_TOPK_down - 1
-        # device = last_layer_state.device
+        device = last_layer_state.device
 
         diff = hidden_states_cur - hidden_states_prev # [seqlen,embed_dim]
         diff_norm = torch.norm(diff,dim=-1) # [seqlen]
         top_k_indices = diff_norm.topk(TOKEN_TOPK).indices
+        top_k_real_indices = top_k_indices
+        retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device)
+        return retained_image_tokens_index
+
+    def get_retained_image_token_pivot_sim(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
+        DART_config = config.DART_config
+        K = DART_config['K']
+        image_token_start_index = 0
+        image_token_length = last_layer_state.shape[0]
+
+        pivot_image_token = DART_config['pivot_image_token']
+        pivot_text_token = DART_config['pivot_text_token']
+
+        reduction_ratio = DART_config['reduction_ratio']
+        # 计算原始值
+        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
+        # 向下取4的倍数
+        TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
+        # 向上取4的倍数
+        TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
+        # 选择与原始值更接近的结果
+        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
+            TOKEN_TOPK = TOKEN_TOPK_down
+        else:
+            TOKEN_TOPK = TOKEN_TOPK_up
+        
+        device = last_layer_state.device
+        pivot_token = last_layer_state.mean(dim=0) # 求出平均token [embed_dim]
+        cos_sim = -torch.nn.functional.cosine_similarity(pivot_token, last_layer_state, dim=-1) # 计算余弦相似度
+        top_k_indices = cos_sim.topk(TOKEN_TOPK).indices
         top_k_real_indices = top_k_indices
         retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device)
         return retained_image_tokens_index
