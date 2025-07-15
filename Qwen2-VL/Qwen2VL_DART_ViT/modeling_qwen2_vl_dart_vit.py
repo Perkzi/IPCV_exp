@@ -1811,8 +1811,8 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
             DART_config = self.config.DART_config
             if DART_config is not None :
                 K = DART_config['K']
-                image_token_start_index = DART_config['image_token_start_index']
-                image_token_length = DART_config['image_token_length']
+                #image_token_start_index = DART_config['image_token_start_index']
+                #image_token_length = DART_config['image_token_length']
                 seq_len = hidden_states_pkg['hidden_states'].shape[0]
                 
                 if K-1>0 and blk.layer_idx ==K-1 and DART_config['diff_choose'] and hidden_states_pkg['hidden_states'].shape[0]>1:
@@ -1842,17 +1842,18 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                         hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
                         retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
                     elif DART_config['pivot_sim_choose']:
-                        retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+                        retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
                     else:
                         retained_image_tokens_index = self.get_retained_image_token(
                             self.config, last_layer_state, k_states).to(device)
 
                     # keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index,torch.arange(image_token_start_index+image_token_length,seq_len,device=device)))
-                    keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index))
+                    #keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index))
                     # sort index
-                    keep_indexs = keep_indexs.sort().values
-
+                    keep_indexs = retained_image_tokens_index.sort().values
+                   
                     hidden_states_pkg['hidden_states'] = hidden_states_pkg['hidden_states'][keep_indexs,:]
+                    #print(hidden_states_pkg['hidden_states'].shape)
                     rotary_pos_emb = rotary_pos_emb[keep_indexs,:]
 
                     # 更新cu_seqlens并计算每帧img的裁剪ratio

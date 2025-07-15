@@ -5,7 +5,7 @@
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
-tasks=("mmbench_en")
+tasks=("mme")
 pruned_layers=(2)
 reduction_ratios=(0.2)
 
