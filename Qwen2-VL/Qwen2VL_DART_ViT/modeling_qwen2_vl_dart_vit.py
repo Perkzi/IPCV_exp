@@ -1841,6 +1841,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     elif DART_config['diff_choose']:
                         hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
                         retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+
                     elif DART_config['pivot_sim_choose']:
                         retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
                     else:
@@ -1851,7 +1852,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     #keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index))
                     # sort index
                     keep_indexs = retained_image_tokens_index.sort().values
-                   
+                    
                     hidden_states_pkg['hidden_states'] = hidden_states_pkg['hidden_states'][keep_indexs,:]
                     #print(hidden_states_pkg['hidden_states'].shape)
                     rotary_pos_emb = rotary_pos_emb[keep_indexs,:]
@@ -1970,19 +1971,16 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         
         return retained_indices
 
-    def get_retained_image_token_attn_scores (self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor, attn_scores: torch.Tensor) -> torch.Tensor:
+    def get_retained_image_token_attn_scores(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor, attn_scores: torch.Tensor) -> torch.Tensor:
         # any_state [seq_len, num_heads, head_dim]
         DART_config = config.DART_config
         K = DART_config['K']
         image_token_start_index = 0
         image_token_length = last_layer_state.shape[0]
 
-        pivot_image_token = DART_config['pivot_image_token']
-        pivot_text_token = DART_config['pivot_text_token']
-
         reduction_ratio = DART_config['reduction_ratio']
         # 计算原始值
-        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
+        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
         # 向下取4的倍数
         TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
         # 向上取4的倍数
@@ -2008,12 +2006,9 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         image_token_start_index = 0
         image_token_length = last_layer_state.shape[0]
 
-        pivot_image_token = DART_config['pivot_image_token']
-        pivot_text_token = DART_config['pivot_text_token']
-
         reduction_ratio = DART_config['reduction_ratio']
         # 计算原始值
-        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
+        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
         # 向下取4的倍数
         TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
         # 向上取4的倍数
@@ -2040,12 +2035,9 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         image_token_start_index = 0
         image_token_length = last_layer_state.shape[0]
 
-        pivot_image_token = DART_config['pivot_image_token']
-        pivot_text_token = DART_config['pivot_text_token']
-
         reduction_ratio = DART_config['reduction_ratio']
         # 计算原始值
-        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
+        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
         # 向下取4的倍数
         TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
         # 向上取4的倍数
