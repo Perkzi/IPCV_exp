@@ -33,3 +33,5 @@ ckpts*
 
 # Demo
 serve_images/flash_attn-*.whl
+
+*.whl

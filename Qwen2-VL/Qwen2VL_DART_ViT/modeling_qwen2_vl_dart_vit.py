@@ -19,7 +19,7 @@
 # limitations under the License.
 
 from turtle import forward
-from pytorch_memlab import profile
+#from pytorch_memlab import profile
 """PyTorch Qwen2-VL model."""
 
 import math

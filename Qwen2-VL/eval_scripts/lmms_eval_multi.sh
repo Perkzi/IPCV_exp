@@ -4,10 +4,10 @@
 # tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "textvqa")  # ʾ�������б�
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
-
+export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
 tasks=("mmbench_en")
-pruned_layers=(2)
-reduction_ratios=(0.2)
+pruned_layers=(2 5)
+reduction_ratios=(0.2 0.3)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -21,7 +21,7 @@ for task in "${tasks[@]}"; do
       echo "Reduction Ratio: $reduction_ratio"
       echo "========================================"
 
-      model_id="Qwen/Qwen2-VL-7B-Instruct"
+      model_id="/obs/pretrained_models/Qwen/Qwen2-VL-7B-Instruct"
       model_name="Qwen2-VL-7B-Instruct"
       output_path="./logs/${model_name}/${task}/pruned_${pruned_layer}_ratio_${reduction_ratio}/"
       mkdir -p "$output_path"
@@ -34,10 +34,11 @@ for task in "${tasks[@]}"; do
       pivot_text_token=4
       random_choose=False
       attn_scores_choose=False
-      diff_choose=False
-      pivot_sim_choose=True
+      diff_choose=True
+      pivot_sim_choose=False
+      GPU=3
 
-      python3 -m accelerate.commands.launch \
+      CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
           --num_processes=1 \
           --main_process_port 50008 \
           -m lmms_eval \
