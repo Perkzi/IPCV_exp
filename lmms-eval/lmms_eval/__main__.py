@@ -467,7 +467,7 @@ def cli_evaluate_single(args: Union[argparse.Namespace, None] = None) -> None:
     eval_logger.info(f"Selected Tasks: {task_names}")
     request_caching_args = request_caching_arg_to_dict(cache_requests=args.cache_requests)
     datetime_str = utils.get_datetime_str(timezone=args.timezone)
-
+    
     results = evaluator.simple_evaluate(
         model=args.model,
         model_args=args.model_args,

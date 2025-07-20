@@ -31,10 +31,12 @@ def configure_DART(model, config):
 
     if config['Sparse']:
         #model.config.vision_config.DART_config = config
+        model.config.DART_config = config
         model.visual.config.DART_config = config
 
     else:
-        model.config.vision_config.DART_config = None
+        #model.config.vision_config.DART_config = None
+        pass
 
 
 @register_model("qwen2_vl_dart_vit")
@@ -56,10 +58,13 @@ class Qwen2_VL_DART_ViT(lmms):
         attn_implementation="flash_attention_2",
         Sparse=True,
         pruned_layer=2,
+        reduction_ratio=0.778,
+        vit_Sparse=True,
+        vit_pruned_layer=2,
+        vit_reduction_ratio=0.778,
         image_token_start_index=0,
         image_token_length=0,
         max_num_trunction=0,
-        reduction_ratio=0.778,
         pivot_image_token=4,
         pivot_text_token=4,
         random_choose = False,
@@ -101,11 +106,15 @@ class Qwen2_VL_DART_ViT(lmms):
 
         DART_config = {
             "Sparse": Sparse,
-            "K": pruned_layer,
+            "pruned_layer": pruned_layer,
+            "reduction_ratio": reduction_ratio,
+            "vit_Sparse": vit_Sparse,
+            "vit_pruned_layer": vit_pruned_layer,
+            "vit_reduction_ratio": vit_reduction_ratio,
+
             "image_token_start_index": image_token_start_index,
             "image_token_length": image_token_length,
             "max_num_trunction": max_num_trunction,
-            "reduction_ratio": reduction_ratio,
             "pivot_image_token": pivot_image_token,
             "pivot_text_token": pivot_text_token,
             "random_choose": random_choose,
