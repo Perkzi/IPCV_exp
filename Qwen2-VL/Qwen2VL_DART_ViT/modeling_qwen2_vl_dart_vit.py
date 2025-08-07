@@ -382,16 +382,48 @@ class Qwen2VLVisionBlock(nn.Module):
         )
         self.mlp = VisionMlp(dim=config.embed_dim, hidden_dim=mlp_hidden_dim, hidden_act=config.hidden_act)
 
-    def forward(self, hidden_states_pkg : dict, cu_seqlens, rotary_pos_emb) -> torch.Tensor:
-        hidden_states = hidden_states_pkg['hidden_states']
+    def forward(self, hidden_states_pkg: dict, cu_seqlens, rotary_pos_emb):
+        hidden_states = hidden_states_pkg['hidden_states']  # [L, D]
+        skip_ffn_mask = hidden_states_pkg.get('skip_ffn_mask', None)  # [L] 或 None
+
+        # 1) Attention 部分不变
         output = self.attn(
-            self.norm1(hidden_states), cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb
+            self.norm1(hidden_states),
+            cu_seqlens=cu_seqlens,
+            rotary_pos_emb=rotary_pos_emb
         )
         hidden_states = hidden_states + output['attn_output']
-        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
-        return {'hidden_states':hidden_states,
-                'k_states':output['k_states'],
-                'attn_scores':output['attn_scores']}
+
+        # 2) 准备做 FFN（MLP）前的归一化
+        normed = self.norm2(hidden_states)  # [L, D]
+
+        # 3) 如果有 skip_ffn_mask，就只给 mask==False 的做 MLP
+        
+        if skip_ffn_mask is not None:
+            #print("skip_ffn_mask",skip_ffn_mask,skip_ffn_mask.shape)
+            # 只挑出需要跑 MLP 的 token
+            keep_idxs = torch.nonzero(~skip_ffn_mask, as_tuple=False).view(-1)
+            #print("keep",keep_idxs)
+            kept_normed = normed[keep_idxs]   # [L_keep, D]
+            kept_mlp = self.mlp(kept_normed)  # [L_keep, D]
+
+            # 在全序列上补 0
+            mlp_out = torch.zeros_like(normed)  # [L, D]
+            mlp_out[keep_idxs] = kept_mlp
+        else:
+            # 普通模式：全量跑 MLP
+            mlp_out = self.mlp(normed)
+
+        # 4) 残差相加
+        hidden_states = hidden_states + mlp_out
+
+        # 5) 返回并携带 attn states
+        return {
+            'hidden_states': hidden_states,
+            'k_states': output['k_states'],
+            'attn_scores': output['attn_scores'],
+            'skip_ffn_mask': skip_ffn_mask
+        }
 
 # Copied from transformers.models.llama.modeling_llama._prepare_4d_causal_attention_mask_with_cache_position
 def _prepare_4d_causal_attention_mask_with_cache_position(
@@ -1384,7 +1416,7 @@ class DART(Qwen2VLModel):
                 #  'image_token_length': 1316, 'max_num_trunction': 128,
                 #  'reduction_ratio': 0.778, 'pivot_image_token': 4, 'pivot_text_token': 4}
                 DART_config = self.config.DART_config
-                if DART_config is not None:
+                if DART_config is not None and DART_config['Sparse']:
                     K = DART_config['pruned_layer']  # pruned layer
                     image_token_start_index = DART_config['image_token_start_index']
                     image_token_length = DART_config['image_token_length']
@@ -1648,8 +1680,8 @@ class DART(Qwen2VLModel):
             old_block.state_dict(),
             strict=False  # 允许注意力实现不同导致的权重不匹配
         )
-        # print(f"Missing keys: {missing_keys}")       # 应该只包含与注意力实现相关的键
-        # print(f"Unexpected keys: {unexpected_keys}") # 应该为空或只包含预期的键
+        #print(f"Missing keys: {missing_keys}")       # 应该只包含与注意力实现相关的键
+        #print(f"Unexpected keys: {unexpected_keys}") # 应该为空或只包含预期的键
         # 替换 block
         self.layers[k] = new_block
         return 
@@ -1744,8 +1776,8 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         self.visual = DART_ViT._from_config(
             config.vision_config, attn_implementation=config._attn_implementation
         )
-        #self.model = Qwen2VLModel(config)
-        self.model = DART(config)
+        self.model = Qwen2VLModel(config)
+        #self.model = DART(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.padding_side = "left"  # set it to left by default, user can use setter to change padding_sides
@@ -2217,7 +2249,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         hidden_states_prev = None
         for i, blk in enumerate(self.blocks):
             DART_config = self.config.DART_config
-            if DART_config is not None :
+            if DART_config is not None and DART_config['vit_Sparse']:
                 K = DART_config['vit_pruned_layer']
                 #image_token_start_index = DART_config['image_token_start_index']
                 #image_token_length = DART_config['image_token_length']
@@ -2225,7 +2257,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                 
                 if K-1>0 and blk.layer_idx ==K-1 and DART_config['diff_choose'] and hidden_states_pkg['hidden_states'].shape[0]>1:
                     hidden_states_prev = hidden_states_pkg['hidden_states'] # K-1层的输入
-
+                #print("layer_idx",blk.layer_idx, hidden_states_pkg['hidden_states'].shape)
                 if blk.layer_idx == K and hidden_states_pkg['hidden_states'].shape[0]>1:
                     device = hidden_states_pkg['hidden_states'].device
                     last_layer_state = hidden_states_pkg['hidden_states'].detach().clone()
@@ -2264,32 +2296,24 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
 
                     # **在这里保存原始序列长度、原始 hidden_states，以及 removed 索引和它们对应的向量**
                     orig_seq_len = hidden_states_pkg['hidden_states'].shape[0]
-                    orig_states = hidden_states_pkg['hidden_states'].detach().clone()
+                    #orig_states = hidden_states_pkg['hidden_states'].detach().clone()
                     removed_mask = torch.ones(orig_seq_len, dtype=torch.bool, device=device)
                     removed_mask[keep_indexs] = False
                     removed_indices = torch.nonzero(removed_mask, as_tuple=False).view(-1)
-                    removed_states = orig_states[removed_indices]
+                    #removed_states = orig_states[removed_indices]
                     #print("remove state",removed_states.shape)
 
-                    # 然后执行真正的剪枝
-                    #print("vit_before",hidden_states_pkg['hidden_states'].shape)
-                    hidden_states_pkg['hidden_states'] = orig_states[keep_indexs,:]
-                    rotary_pos_emb = rotary_pos_emb[keep_indexs,:]
-                    #print("vit_after",hidden_states_pkg['hidden_states'].shape)
-                    # …… 计算新的 cu_seqlens
+                    # 3) 把全量序列再放回去
+                    #hidden_states_pkg['hidden_states'] = orig_states
+                    # 4) 把 mask 放到 pkg 里，后续每层 Block 都能拿到
+                    hidden_states_pkg['skip_ffn_mask'] = removed_mask
+                    #print('hidden_states_pkg',hidden_states_pkg)
 
-                    # 最后记下来这些供后面拼回用
-                    self._sparse_vit_saved = {
-                        "orig_seq_len": orig_seq_len,
-                        "keep_indexs": keep_indexs,
-                        "removed_indices": removed_indices,
-                        "removed_states": removed_states
-                    }
                     
                     
                     #hidden_states_pkg['hidden_states'] = hidden_states_pkg['hidden_states'][keep_indexs,:]
                     #rotary_pos_emb = rotary_pos_emb[keep_indexs,:]
-                    
+                    '''
                     # 更新cu_seqlens并计算每帧img的裁剪ratio
                     num_frames = len(cu_seqlens) - 1  # 图像总帧数
                     # 更高效地计算每帧保留的token数量
@@ -2308,32 +2332,14 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     new_cu_seqlens = new_cu_seqlens.cumsum(dim=0)
                     # 更新cu_seqlens
                     cu_seqlens = new_cu_seqlens.to(torch.int32)
+                    '''
+                    #print("seq-len",orig_seq_len,cu_seqlens)
                     
         # ------------------------END------------------------------------------
+            
             hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
 
 
-        # -------- DART 拼回被剪的 token --------
-        if hasattr(self, "_sparse_vit_saved"):
-            saved = self._sparse_vit_saved
-            L, D = saved["orig_seq_len"], saved["removed_states"].size(1)
-            device = hidden_states_pkg['hidden_states'].device
-
-            # 1) 准备全零张量，形状 [L, D]
-            full_states = torch.zeros(L, D, device=device,dtype=hidden_states_pkg['hidden_states'].dtype)
-
-            # 2) 把保留下来的填回去
-            full_states[saved["keep_indexs"]] = hidden_states_pkg['hidden_states']
-
-            # 3) 把被剪掉的也填回去（位置不变）
-            full_states[saved["removed_indices"]] = saved["removed_states"]
-
-            # 4) 替换当前 hidden_states，后面 merger 用它
-            hidden_states_pkg['hidden_states'] = full_states
-
-            # 可选：删掉缓存，释放内存
-            del self._sparse_vit_saved
-        # ----------------------------------------
         #if frame_counts !=0:
         #    frame_counts = frame_counts/(self.config.spatial_merge_size**2)
         

@@ -326,7 +326,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         try:
             # if is_main_process and args.wandb_args:  # thoughtfully we should only init wandb once, instead of multiple ranks to avoid network traffics and unwanted behaviors.
             #     wandb_logger = WandbLogger()
-
+            
             results, samples = cli_evaluate_single(args)
             results_list.append(results)
 

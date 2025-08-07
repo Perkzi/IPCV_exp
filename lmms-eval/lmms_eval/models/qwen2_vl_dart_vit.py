@@ -29,14 +29,14 @@ except ImportError:
 
 def configure_DART(model, config):
 
-    if config['Sparse']:
-        #model.config.vision_config.DART_config = config
-        model.config.DART_config = config
-        model.visual.config.DART_config = config
-
-    else:
+    
+    #model.config.vision_config.DART_config = config
+    model.config.DART_config = config
+    model.visual.config.DART_config = config
+    #if config['Sparse']:
+    #else:
         #model.config.vision_config.DART_config = None
-        pass
+        
 
 
 @register_model("qwen2_vl_dart_vit")

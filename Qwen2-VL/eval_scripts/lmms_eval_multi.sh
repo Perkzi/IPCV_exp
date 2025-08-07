@@ -5,12 +5,12 @@
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
-export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
+#export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
 tasks=("mmbench_en")
-pruned_layers=(2)
-reduction_ratios=(0.2)
-vit_pruned_layers=(2)
-vit_reduction_ratios=(0.2)
+pruned_layers=(-1)
+reduction_ratios=(0)
+vit_pruned_layers=(5)
+vit_reduction_ratios=(0.3)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -29,12 +29,13 @@ for task in "${tasks[@]}"; do
           echo "========================================"
 
           model_id="/obs/pretrained_models/Qwen/Qwen2-VL-7B-Instruct"
-          #model_id="Qwen/Qwen2-VL-7B-Instruct"
+          model_id="Qwen/Qwen2-VL-7B-Instruct"
           model_name="Qwen2-VL-7B-Instruct"
           output_path="./logs/${model_name}/${task}/pruned_${pruned_layer}_ratio_${reduction_ratio}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
+          output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           mkdir -p "$output_path"
 
-          Sparse=True
+          Sparse=False
           vit_Sparse=True
           image_token_start_index=0
           image_token_length=0
@@ -42,10 +43,11 @@ for task in "${tasks[@]}"; do
           pivot_image_token=4
           pivot_text_token=4
           random_choose=False
-          attn_scores_choose=True
-          diff_choose=False
+          attn_scores_choose=False
+          diff_choose=True
           pivot_sim_choose=False
-          GPU=4
+          GPU=1
+
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
               --num_processes=1 \
