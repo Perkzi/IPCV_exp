@@ -71,6 +71,11 @@ class Qwen2_VL_DART_ViT(lmms):
         attn_scores_choose=False,
         diff_choose = False,
         pivot_sim_choose = False,
+
+        vit_random_choose = False,
+        vit_attn_scores_choose=False,
+        vit_diff_choose = False,
+        vit_pivot_sim_choose = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -117,10 +122,16 @@ class Qwen2_VL_DART_ViT(lmms):
             "max_num_trunction": max_num_trunction,
             "pivot_image_token": pivot_image_token,
             "pivot_text_token": pivot_text_token,
+
             "random_choose": random_choose,
             "attn_scores_choose":attn_scores_choose,
             "diff_choose":diff_choose,
-            "pivot_sim_choose":pivot_sim_choose
+            "pivot_sim_choose":pivot_sim_choose,
+
+            "vit_random_choose": vit_random_choose,
+            "vit_attn_scores_choose":vit_attn_scores_choose,
+            "vit_diff_choose":vit_diff_choose,
+            "vit_pivot_sim_choose":vit_pivot_sim_choose
         }
         configure_DART(self._model, DART_config) # HACK
 

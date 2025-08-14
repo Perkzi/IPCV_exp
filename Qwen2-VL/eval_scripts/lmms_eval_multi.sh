@@ -7,10 +7,10 @@
 
 #export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
 tasks=("mmbench_en")
-pruned_layers=(-1)
-reduction_ratios=(0)
-vit_pruned_layers=(5)
-vit_reduction_ratios=(0.3)
+pruned_layers=(2)
+reduction_ratios=(0.5)
+vit_pruned_layers=(2)
+vit_reduction_ratios=(0.5)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -35,18 +35,24 @@ for task in "${tasks[@]}"; do
           output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           mkdir -p "$output_path"
 
-          Sparse=False
+          Sparse=True
           vit_Sparse=True
           image_token_start_index=0
           image_token_length=0
           max_num_trunction=128
           pivot_image_token=4
           pivot_text_token=4
+
           random_choose=False
           attn_scores_choose=False
           diff_choose=True
           pivot_sim_choose=False
-          GPU=1
+
+          vit_random_choose=False
+          vit_attn_scores_choose=False
+          vit_diff_choose=True
+          vit_pivot_sim_choose=False
+          GPU=6
 
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
@@ -54,11 +60,12 @@ for task in "${tasks[@]}"; do
               --main_process_port 50008 \
               -m lmms_eval \
               --model qwen2_vl_dart_vit \
-              --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose \
+              --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose \
               --tasks "${task}" \
               --batch_size 1 \
               --log_samples \
               --output_path "$output_path"
+
 
           # ���Ӽ��ʱ�����˿ڳ�ͻ
           sleep 10
