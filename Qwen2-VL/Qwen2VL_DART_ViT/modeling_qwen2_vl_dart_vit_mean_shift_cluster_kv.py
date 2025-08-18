@@ -1,5 +1,9 @@
 '''
-剪掉的token，在某一层恢复,加上所有保留token的变化均值
+在第k层减去一部分token，同时用k-means对所有的token分类成多个cluster
+在被剪掉的层，被剪掉的token加上同一cluster里token的变化均值（不更新原来的hiddenstate，在每一层都重新计算），只用来做完整的attention
+剪掉的token，在某一层恢复,加上同一cluster里所有保留token的变化均值
+如果同cluster的所有token都被剪枝了，就加上所有保留token的变化均值
+
 '''
 
 # coding=utf-8
@@ -35,6 +39,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch.nn import CrossEntropyLoss, LayerNorm
+from sklearn.cluster import KMeans
 
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, StaticCache
@@ -386,12 +391,55 @@ class Qwen2VLVisionBlock(nn.Module):
         )
         self.mlp = VisionMlp(dim=config.embed_dim, hidden_dim=mlp_hidden_dim, hidden_act=config.hidden_act)
 
-    def forward(self, hidden_states_pkg : dict, cu_seqlens, rotary_pos_emb) -> torch.Tensor:
-        hidden_states = hidden_states_pkg['hidden_states']
+    def forward(self, hidden_states_pkg : dict, cu_seqlens, rotary_pos_emb, sparse_vit_saved=None) -> torch.Tensor:
+        if sparse_vit_saved is not None:
+            # 加上变化量并拼接
+            saved = sparse_vit_saved
+            L, D = saved["orig_seq_len"], saved["removed_states"].size(1)
+            device = hidden_states_pkg['hidden_states'].device
+
+            # 3) 计算保留 token 的增量 delta
+            new_kept = hidden_states_pkg['hidden_states']       # [K, D]
+            orig_kept = saved["orig_kept_states"]               # [K, D]
+            deltas    = new_kept - orig_kept                    # [K, D]
+            #print("new_kept",new_kept, orig_kept)
+
+            # 4) 按簇计算平均 delta
+            all_labels  = saved["cluster_labels"]               # [L]
+            keep_labels = all_labels[saved["keep_indexs"]]      # [K]
+            n_clusters  = saved["n_clusters"]
+
+            # 全局平均增量，后备方案
+            global_avg = deltas.mean(dim=0, keepdim=True)       # [1, D]
+
+            # 每个簇的平均增量，初始化为全局平均
+            cluster_avg = global_avg.repeat(n_clusters, 1)      # [C, D]
+            for c in range(n_clusters):
+                mask = keep_labels == c
+                if mask.any():
+                    cluster_avg[c] = deltas[mask].mean(dim=0)
+
+            # 5) 为每个被剪 token 拿到对应簇的 avg_delta
+            rem_labels        = all_labels[saved["removed_indices"]]  # [R]
+            avg_delta_removed = cluster_avg[rem_labels]               # [R, D]                     # [R, D]
+            
+            # 4) 准备 full_states 并写回
+            hidden_states = torch.zeros(L, D, device=device, dtype=new_kept.dtype)
+            hidden_states[saved["keep_indexs"]] = new_kept                                # fill kept
+            hidden_states[saved["removed_indices"]]    = (saved["removed_states"] + avg_delta_removed)
+        else:
+            hidden_states = hidden_states_pkg['hidden_states']
+
         output = self.attn(
             self.norm1(hidden_states), cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb
         )
         hidden_states = hidden_states + output['attn_output']
+
+
+        if sparse_vit_saved is not None:
+            # 重新裁剪
+            hidden_states = hidden_states[saved["keep_indexs"]]
+
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
         return {'hidden_states':hidden_states,
                 'k_states':output['k_states'],
@@ -2226,6 +2274,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         return model_inputs
 
 
+
 class DART_ViT(Qwen2VisionTransformerPretrainedModel):
     def __init__(self, config:Qwen2VLVisionConfig):
         super().__init__(config)
@@ -2320,6 +2369,26 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     # 保留下来的 states
                     orig_kept_states = orig_states[keep_indexs, :].clone()
 
+                    # ========== 新增：对所有 orig_states 做 KMeans 聚类 ==========
+                    n_clusters = 10  # 自己定义或从配置里读取
+                    states_np = orig_states.float().cpu().numpy()
+                    kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(states_np)
+
+                    cluster_labels = torch.tensor(kmeans.labels_, device=device)  # [L]
+                    # ===========================================================
+                    # =====绘图======
+                    # labels_np = kmeans.labels_  # numpy array, shape=(L,)
+                    # # 调用 plot_layer_states
+                    # plot_layer_states_cluster(
+                    #     states      = states_np,
+                    #     out_dir     = "./layer_plots",
+                    #     name        = "kmeans_on_pca",
+                    #     cmap        = "tab10",    # 10 类可以用 tab10 颜色盘
+                    #     labels      = labels_np,
+                    # )
+
+                    #================
+
                     # 然后执行真正的剪枝
                     #print("vit_before",hidden_states_pkg['hidden_states'].shape)
                     hidden_states_pkg['hidden_states'] = orig_states[keep_indexs,:]
@@ -2333,7 +2402,10 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                         "keep_indexs": keep_indexs,
                         "removed_indices": removed_indices,
                         "removed_states": removed_states,
-                        "orig_kept_states": orig_kept_states
+                        "orig_kept_states": orig_kept_states,
+
+                        "cluster_labels": cluster_labels,
+                        "n_clusters": n_clusters
                     }
 
                     
@@ -2361,17 +2433,19 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     #print("seq-len",orig_seq_len,cu_seqlens)
                 
                 
+                    
         # ------------------------END------------------------------------------
             #print("layer",blk.layer_idx)
             if hasattr(self, "_sparse_vit_saved"):
                 #print(hidden_states_pkg['hidden_states'].shape, cu_seqlens_pruned, rotary_pos_emb_pruned.shape)
-                hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens_pruned, rotary_pos_emb=rotary_pos_emb_pruned)
+                #hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens_pruned, rotary_pos_emb=rotary_pos_emb_pruned)
+                hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb, sparse_vit_saved=self._sparse_vit_saved)
             else:
                 #print(hidden_states_pkg['hidden_states'].shape, cu_seqlens, rotary_pos_emb.shape)
                 hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
-            
+
             # -------- 拼回被剪的 token --------
-            
+                
             if blk.layer_idx == 32-1 and hasattr(self, "_sparse_vit_saved"):
                 saved = self._sparse_vit_saved
                 L, D = saved["orig_seq_len"], saved["removed_states"].size(1)
@@ -2383,28 +2457,46 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                 # 2) 把保留下来的填回去
                 full_states[saved["keep_indexs"]] = hidden_states_pkg['hidden_states']
 
-                # --- 计算平均变化量 avg_delta ---
-                # 当前层保留下来的新值
-                new_kept = hidden_states_pkg['hidden_states']              # (K, D)
-                # 当初剪枝时保留下来的老值
-                orig_kept = saved["orig_kept_states"]                     # (K, D)
-                # 平均差：在所有 kept tokens 上取 mean
-                avg_delta = (new_kept - orig_kept).mean(dim=0, keepdim=True)  # (1, D)
-                # ----------------------------------
+                # 3) 计算保留 token 的增量 delta
+                new_kept = hidden_states_pkg['hidden_states']       # [K, D]
+                orig_kept = saved["orig_kept_states"]               # [K, D]
+                deltas    = new_kept - orig_kept                    # [K, D]
+                #print("new_kept",new_kept, orig_kept)
 
-                # 3) 被删掉的加上 avg_delta 再填回
-                #print("removed_states",saved["removed_states"].shape,  avg_delta.shape,(saved["removed_states"] + avg_delta).shape)
-                # torch.Size([1044, 1280]) torch.Size([1, 1280]) torch.Size([1044, 1280])
+                # 4) 按簇计算平均 delta
+                all_labels  = saved["cluster_labels"]               # [L]
+                keep_labels = all_labels[saved["keep_indexs"]]      # [K]
+                n_clusters  = saved["n_clusters"]
+
+                # 全局平均增量，后备方案
+                global_avg = deltas.mean(dim=0, keepdim=True)       # [1, D]
+
+                # 每个簇的平均增量，初始化为全局平均
+                cluster_avg = global_avg.repeat(n_clusters, 1)      # [C, D]
+                for c in range(n_clusters):
+                    mask = keep_labels == c
+                    if mask.any():
+                        cluster_avg[c] = deltas[mask].mean(dim=0)
+
+                # 5) 为每个被剪 token 拿到对应簇的 avg_delta
+                rem_labels        = all_labels[saved["removed_indices"]]  # [R]
+                avg_delta_removed = cluster_avg[rem_labels]               # [R, D]
+                #print("cluster",cluster_avg,rem_labels[:10],avg_delta_removed[:10])
+                #torch.set_printoptions(threshold=10**5)
+                #print("rem_labels",rem_labels)
+                #print("all_labels",all_labels)
+
+                # 6) 把修正后的被剪 token 填回
                 full_states[saved["removed_indices"]] = (
-                    saved["removed_states"] + avg_delta
+                    saved["removed_states"] + avg_delta_removed
                 )
 
-                # 4) 更新回 hidden_states
+                # 7) 更新 hidden_states 并释放缓存
                 hidden_states_pkg['hidden_states'] = full_states
-
-                # 可选：删掉缓存，释放内存
                 del self._sparse_vit_saved
                 # ----------------------------------------
+            
+
         
         # ----------------------------------------
         #if frame_counts !=0:
@@ -2652,6 +2744,51 @@ def plot_layer_states( states: np.ndarray,
     plt.close()
 
     print(f"[Saved] {save_path}")
+
+
+def plot_layer_states_cluster(
+    states: np.ndarray,
+    out_dir: str,
+    name: str,
+    cmap: str = 'rainbow',
+    labels: np.ndarray = None,   # 新增一个 labels 参数, 画每个cluster的分布
+):
+    """
+    states:     numpy array of shape (L, D)
+    out_dir:    存图的文件夹路径
+    name:       用于区分不同图的前缀/名称
+    cmap:       matplotlib 颜色映射
+    labels:     numpy array of shape (L,), 每个点的类别／颜色索引
+    """
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    # 1. PCA 降到 2 维
+    pca    = PCA(n_components=2)
+    coords = pca.fit_transform(states)  # shape = (L, 2)
+
+    # 2. 准备 c
+    c = labels if labels is not None else np.arange(len(states))
+
+    # 3. 画散点图
+    plt.figure(figsize=(6, 6))
+    plt.scatter(coords[:, 0], coords[:, 1], c=c, cmap=cmap, s=8)
+    # 可选：如果要标号可以保留下面这段
+    #for i, (x, y) in enumerate(coords):
+    #    plt.text(x, y, str(i), fontsize=6, alpha=0.5)
+
+    plt.title(f"PCA of layer states ({name})")
+    plt.xlabel("PC1")
+    plt.ylabel("PC2")
+    plt.tight_layout()
+
+    # 4. 保存
+    save_path = os.path.join(out_dir, f"{name}.png")
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+
+    print(f"[Saved] {save_path}")
+
 
 class Qwen2RMSNorm_no_param(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):

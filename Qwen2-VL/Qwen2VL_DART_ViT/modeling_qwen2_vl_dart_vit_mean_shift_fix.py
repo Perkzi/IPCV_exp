@@ -1,5 +1,7 @@
 '''
 剪掉的token，在某一层恢复,加上所有保留token的变化均值
+
+TODO：在主模型剪枝时使用vit相同的剪枝index
 '''
 
 # coding=utf-8
@@ -1330,6 +1332,7 @@ class DART(Qwen2VLModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        keep_indexs=None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -1427,44 +1430,66 @@ class DART(Qwen2VLModel):
                         #k_states = layer_outputs[-2]# 上一层注意力之前的key
                         k_states = layer_outputs['key_states']
 
-
-                        # keep index
-                        #retained_image_tokens_index = self.get_retained_image_token(self.config, last_layer_state, k_states).to(device)
-                        
-                        #print("token index",last_layer_state.shape, k_states.shape)#,retained_image_tokens_index.shape)
-                        #token index torch.Size([1, 1378, 3584]) torch.Size([1, 28, 1378, 128]) torch.Size([292])
-
-                        if DART_config['attn_scores_choose']:
-                            attn_scores = layer_outputs['attn_scores']
-                            retained_image_tokens_index = self.get_retained_image_token_attn_scores(
-                                self.config, last_layer_state, k_states,attn_scores).to(device)
-                            del layer_outputs['attn_scores']
-                            del attn_scores
-                            torch.cuda.synchronize()
-                            gc.collect()
-                            torch.cuda.empty_cache()
-                            # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
-                        elif DART_config['random_choose']:
-                            # 随机选取
-                            retained_image_tokens_index = self.get_retained_image_token_random(
-                                self.config, last_layer_state, k_states).to(device)
+                        if keep_indexs is None:
+                            # keep index
+                            #retained_image_tokens_index = self.get_retained_image_token(self.config, last_layer_state, k_states).to(device)
                             
-                        elif DART_config['diff_choose']:
-                            hidden_states_cur = layer_outputs['hidden_states'][0] # K-1层的输出，即K层的输入
-                            retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+                            #print("token index",last_layer_state.shape, k_states.shape)#,retained_image_tokens_index.shape)
+                            #token index torch.Size([1, 1378, 3584]) torch.Size([1, 28, 1378, 128]) torch.Size([292])
 
-                        elif DART_config['pivot_sim_choose']:
-                            retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
+                            if DART_config['attn_scores_choose']:
+                                attn_scores = layer_outputs['attn_scores']
+                                retained_image_tokens_index = self.get_retained_image_token_attn_scores(
+                                    self.config, last_layer_state, k_states,attn_scores).to(device)
+                                del layer_outputs['attn_scores']
+                                del attn_scores
+                                torch.cuda.synchronize()
+                                gc.collect()
+                                torch.cuda.empty_cache()
+                                # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
+                            elif DART_config['random_choose']:
+                                # 随机选取
+                                retained_image_tokens_index = self.get_retained_image_token_random(
+                                    self.config, last_layer_state, k_states).to(device)
+                                
+                            elif DART_config['diff_choose']:
+                                hidden_states_cur = layer_outputs['hidden_states'][0] # K-1层的输出，即K层的输入
+                                retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+
+                            elif DART_config['pivot_sim_choose']:
+                                retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
+                            else:
+                                retained_image_tokens_index = self.get_retained_image_token(
+                                    self.config, last_layer_state, k_states).to(device)
+
+                            #print("start index",image_token_start_index,retained_image_tokens_index.sort().values,image_token_start_index+image_token_length)
+                            
+                            keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index, torch.arange(image_token_start_index+image_token_length,seq_length,device=device)))
+                            #print("retained image",retained_image_tokens_index.shape,"keep_indexs",keep_indexs.shape)
+                            # sort index
+                            keep_indexs = keep_indexs.sort().values
                         else:
-                            retained_image_tokens_index = self.get_retained_image_token(
-                                self.config, last_layer_state, k_states).to(device)
+                            #print("keep_indexs1",keep_indexs,keep_indexs.shape)
+                            old_L = keep_indexs.size(0)
+                            new_L = old_L // 4
 
-                        #print("start index",image_token_start_index,retained_image_tokens_index.sort().values,image_token_start_index+image_token_length)
-                        
-                        keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index, torch.arange(image_token_start_index+image_token_length,seq_length,device=device)))
-                        #print("retained image",retained_image_tokens_index.shape,"keep_indexs",keep_indexs.shape)
-                        # sort index
-                        keep_indexs = keep_indexs.sort().values
+                            # 1. 等距采样原索引位置
+                            pos = torch.linspace(0,old_L - 1, steps=new_L, device=keep_indexs.device)
+                            idx = pos.round().long()          # (new_K,)
+
+                            # 2. 取样、缩放
+                            sampled = keep_indexs[idx]        # (new_K,)
+                            scaled  = sampled // 4            # 范围自动缩到 ~[0, 5220/4]
+
+                            # 3. 去重 + 排序
+                            new_keep = torch.unique(scaled)   # 长度 ≤ new_K
+                            new_keep, _ = torch.sort(new_keep)
+
+                            #print("keep_indexs2",new_keep,new_keep.shape,image_token_start_index, image_token_length)
+                            new_keep += image_token_start_index
+                            
+                            keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), new_keep, torch.arange(image_token_start_index+image_token_length,seq_length,device=device)))
+                            keep_indexs = keep_indexs.sort().values
 
                         hidden_states = hidden_states[:,keep_indexs,:]
                         #print("1",hidden_states.shape,cache_position.shape)#torch.Size([1, 354, 3584]) torch.Size([1378])
@@ -2029,6 +2054,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        keep_indexs = None
         if inputs_embeds is None:
             #print("CUDA memory before creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             inputs_embeds = self.model.embed_tokens(input_ids) # [batch_size, seq_len, hidden_size]
@@ -2061,7 +2087,8 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 '''
 
                 # vision数量不变
-                image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
+                #image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
+                image_embeds,keep_indexs = self.visual(pixel_values, grid_thw=image_grid_thw)
                 # time_vit_end = time.time()
                 #print("time_cost_vit", time_vit_end - time_vit_start)
                 image_embeds.to(inputs_embeds.device)
@@ -2088,7 +2115,8 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 attention_mask = attention_mask[:,retained_indices]
                 '''
                 # vision数量不变
-                video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
+                #video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
+                video_embeds,keep_indexs = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
                 video_embeds.to(inputs_embeds.device)
                 video_mask = input_ids == self.config.video_token_id
                 inputs_embeds[video_mask] = video_embeds
@@ -2106,6 +2134,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             output_attentions=output_attentions, # bool
             output_hidden_states=output_hidden_states, # bool
             return_dict=return_dict, # bool
+            keep_indexs=keep_indexs,
         )
 
         hidden_states = outputs[0]
@@ -2410,7 +2439,11 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         #if frame_counts !=0:
         #    frame_counts = frame_counts/(self.config.spatial_merge_size**2)
         
-        return self.merger(hidden_states_pkg['hidden_states']) #, frame_counts
+        #return self.merger(hidden_states_pkg['hidden_states']) #, frame_counts
+        return (
+            self.merger(hidden_states_pkg['hidden_states']),
+            locals().get('keep_indexs', None)
+        )
         
     
     def get_retained_image_token(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:

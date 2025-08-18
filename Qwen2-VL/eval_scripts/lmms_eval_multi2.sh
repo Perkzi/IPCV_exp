@@ -45,14 +45,14 @@ for task in "${tasks[@]}"; do
 
           random_choose=False
           attn_scores_choose=False
-          diff_choose=True
+          diff_choose=False
           pivot_sim_choose=False
 
           vit_random_choose=False
           vit_attn_scores_choose=False
           vit_diff_choose=True
           vit_pivot_sim_choose=False
-          GPU=5
+          GPU=6
 
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
