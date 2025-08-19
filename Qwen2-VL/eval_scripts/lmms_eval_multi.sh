@@ -8,9 +8,9 @@
 #export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
 tasks=("mmbench_en")
 pruned_layers=(2)
-reduction_ratios=(0.5)
+reduction_ratios=(0.8)
 vit_pruned_layers=(2)
-vit_reduction_ratios=(0.5)
+vit_reduction_ratios=(0.8)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do

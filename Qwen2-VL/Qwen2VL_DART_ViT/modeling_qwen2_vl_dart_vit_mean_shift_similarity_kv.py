@@ -2372,11 +2372,32 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                         # pairwise distance: [R, K]
                         dists = torch.cdist(removed_states, orig_kept_states, p=2.0)
                         # topk 最小距离对应的 kept_states 索引： [R, 10]
-                        _, rem_to_kept_idx = dists.topk(3, largest=False, dim=1)
+                        _, rem_to_kept_idx = dists.topk(10, largest=False, dim=1)
 
                         flat_idx = rem_to_kept_idx.view(-1)                                        # [R*topk]
                         unique_idx, inv_idx = torch.unique(flat_idx, return_inverse=True)          # unique_idx:[U], inv_idx:[R*topk]
                         #print("unique_idx",flat_idx,unique_idx,inv_idx)
+
+
+
+                        # =============打印=====
+                        # neigh_states = orig_kept_states[rem_to_kept_idx]  
+                        # avg_neigh = neigh_states.mean(dim=1)            
+                        # top3_neigh = neigh_states[:, :3, :]            
+                        # num_show = min(5, removed_states.size(0))
+                        # for i in range(num_show):
+                        #     ridx = removed_indices[i].item()
+                        #     rs   = removed_states[i]     # [D]
+                        #     t3   = top3_neigh[i]         # [3, D]
+                        #     av   = avg_neigh[i]         # [D]
+
+                        #     print(f"\n=== Removed token idx={ridx}  (#{i}) ===")
+                        #     print("removed_state:", rs)
+                        #     for k in range(3):
+                        #         print(f" top3 neighbor[{k}]:", t3[k])
+                        #     print(" avg_top10:    ", av)
+                        # =======================
+
                     # ==============================================================================
 
                     # 然后执行真正的剪枝
