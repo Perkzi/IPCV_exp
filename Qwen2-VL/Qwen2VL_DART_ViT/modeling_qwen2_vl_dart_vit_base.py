@@ -1,8 +1,5 @@
 '''
-TODO:在第k层减去一部分token，同时对每个被减去的token，从保留的token里找出最相似的10个token
-在被剪掉的层，被剪掉的token加上top10相似token的变化均值（不更新原来的hiddenstate，在每一层都重新计算），只用来做完整的attention
-剪掉的token，在最后一层（32-1）恢复,加上top10相似token的变化均值
-
+剪掉的token，在某一层恢复,加上所有保留token的变化均值
 '''
 
 # coding=utf-8
@@ -38,7 +35,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch.nn import CrossEntropyLoss, LayerNorm
-from sklearn.cluster import KMeans
 
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, StaticCache
@@ -385,54 +381,17 @@ class Qwen2VLVisionBlock(nn.Module):
         mlp_hidden_dim = int(config.embed_dim * config.mlp_ratio)
         self.layer_idx = layer_idx
 
-        # 计算量 4*D²·L + D·L²  D=1280
         self.attn = QWEN2_VL_VISION_ATTENTION_CLASSES[attn_implementation](
             config.embed_dim, num_heads=config.num_heads,
         )
-        #print("mlp dim",config.embed_dim,mlp_hidden_dim) # mlp dim 1280 5120
-        # 计算量 8LD² seq_len * 1280 * 5120 * 2  约为attention的8/5倍
         self.mlp = VisionMlp(dim=config.embed_dim, hidden_dim=mlp_hidden_dim, hidden_act=config.hidden_act)
 
-    def forward(self, hidden_states_pkg : dict, cu_seqlens, rotary_pos_emb,sparse_vit_saved=None) -> torch.Tensor:
-        if sparse_vit_saved is not None:
-            # 加上变化量并拼接
-            saved = sparse_vit_saved
-            L, D = saved["orig_seq_len"], saved["removed_states"].size(1)
-            device = hidden_states_pkg['hidden_states'].device
-
-            # 1) 拿出新旧 kept_states 与 rem_to_kept_idx
-            new_kept        = hidden_states_pkg['hidden_states']       # [K, D]
-            orig_kept       = saved["orig_kept_states"]               # [K, D]
-            rem_to_kept_idx = saved["rem_to_kept_idx"]                # [R, 10]
-            removed_indices = saved["removed_indices"]                # [R]
-            unique_idx = saved["unique_idx"]
-            inv_idx = saved["inv_idx"]
-
-            # 2) 只对 unique_idx 计算一次 delta
-            delta_unique = (new_kept[unique_idx] - orig_kept[unique_idx])              # [U, D]
-
-            # 3) 把 inv_idx reshape 回 (R, topk)，再 gather 并均值
-            inv_idx = inv_idx.view(rem_to_kept_idx.shape)                              # [R, topk]
-            #print("delta_unique",delta_unique[inv_idx].shape)
-            avg_delta_removed = delta_unique[inv_idx].mean(dim=1)                      # [R, D]
-            
-            # 4) 准备 full_states 并写回
-            hidden_states = torch.zeros(L, D, device=device, dtype=new_kept.dtype)
-            hidden_states[saved["keep_indexs"]] = new_kept                                # fill kept
-            hidden_states[removed_indices]    = (saved["removed_states"] + avg_delta_removed)
-        else:
-            hidden_states = hidden_states_pkg['hidden_states']
-
+    def forward(self, hidden_states_pkg : dict, cu_seqlens, rotary_pos_emb) -> torch.Tensor:
+        hidden_states = hidden_states_pkg['hidden_states']
         output = self.attn(
             self.norm1(hidden_states), cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb
         )
         hidden_states = hidden_states + output['attn_output']
-
-
-        if sparse_vit_saved is not None:
-            # 重新裁剪
-            hidden_states = hidden_states[saved["keep_indexs"]]
-
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
         return {'hidden_states':hidden_states,
                 'k_states':output['k_states'],
@@ -1542,9 +1501,7 @@ class DART(Qwen2VLModel):
             if output_attentions:
                 #all_self_attns += (layer_outputs[1],)
                 all_self_attns += layer_outputs['attn_scores']
-        #print("hid",hidden_states.shape)
-        # hid torch.Size([1, 1157, 3584])
-        # hid torch.Size([1, 1, 3584])
+
         hidden_states = self.norm(hidden_states) # 层归一化
 
         # add hidden states from the last decoder layer
@@ -2081,7 +2038,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 # num_tokens_prev = input_ids.shape[1]
                 pixel_values = pixel_values.type(self.visual.get_dtype())
                 
-                '''
+                
                 # vision数量变化
                 image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size**2
                 # time_vit_end = time.time()
@@ -2114,11 +2071,12 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                     inputs_embeds = inputs_embeds.clone()
                 # 把 image_embeds填入这些 <image> token 的 embedding 位置：
                 inputs_embeds[image_mask] = image_embeds
+                '''
                 
             if pixel_values_videos is not None:
                 pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
                 
-                '''
+                
                 # vision数量变化
                 video_embeds, retained_nums = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
                 video_embeds.to(inputs_embeds.device)
@@ -2135,7 +2093,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 video_embeds.to(inputs_embeds.device)
                 video_mask = input_ids == self.config.video_token_id
                 inputs_embeds[video_mask] = video_embeds
-                
+                '''
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
@@ -2154,10 +2112,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
         logits = logits.float()
-        
-        # print("labels",labels is not None ,return_dict,logits.shape)
-        # labels False True torch.Size([1, 1157, 152064])
-        # labels False True torch.Size([1, 1, 152064])
+
         loss = None
         if labels is not None:
             # Shift so that tokens < n predict n
@@ -2272,7 +2227,6 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         return model_inputs
 
 
-
 class DART_ViT(Qwen2VisionTransformerPretrainedModel):
     def __init__(self, config:Qwen2VLVisionConfig):
         super().__init__(config)
@@ -2359,6 +2313,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     # **在这里保存原始序列长度、原始 hidden_states，以及 removed 索引和它们对应的向量**
                     orig_seq_len = hidden_states_pkg['hidden_states'].shape[0]
                     orig_states = hidden_states_pkg['hidden_states'].detach().clone()
+                    """
                     removed_mask = torch.ones(orig_seq_len, dtype=torch.bool, device=device)
                     removed_mask[keep_indexs] = False
                     removed_indices = torch.nonzero(removed_mask, as_tuple=False).view(-1)
@@ -2366,47 +2321,10 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     #print("remove state",removed_states.shape)
                     # 保留下来的 states
                     orig_kept_states = orig_states[keep_indexs, :].clone()
-
-                    # ========== TODO: 计算每个 removed token 在 kept_states 里的 10 最近邻 ==========
-                    # 这里用 Euclidean 距离，也可改成余弦或别的度量
-                    with torch.no_grad():
-                        # p=2.0             ：指定用 L2 范数（Euclidean，p=2）；如果 p=1 则是 L1 距离，p=∞ 则是 Chebyshev 距离，等等
-                        # 输出 dists       ：shape=[R, K]，其中 dists[i,j] 是 removed_states[i] 和 orig_kept_states[j] 的 p‐范数距离
-                        # pairwise distance: [R, K]
-                        dists = torch.cdist(removed_states, orig_kept_states, p=2.0)
-                        # topk 最小距离对应的 kept_states 索引： [R, 10]
-                        _, rem_to_kept_idx = dists.topk(10, largest=False, dim=1)
-
-                        flat_idx = rem_to_kept_idx.view(-1)                                        # [R*topk]
-                        unique_idx, inv_idx = torch.unique(flat_idx, return_inverse=True)          # unique_idx:[U], inv_idx:[R*topk]
-                        #print("unique_idx",flat_idx,unique_idx,inv_idx)
-
-
-
-                        # =============打印=====
-                        # neigh_states = orig_kept_states[rem_to_kept_idx]  
-                        # avg_neigh = neigh_states.mean(dim=1)            
-                        # top3_neigh = neigh_states[:, :3, :]            
-                        # num_show = min(5, removed_states.size(0))
-                        # for i in range(num_show):
-                        #     ridx = removed_indices[i].item()
-                        #     rs   = removed_states[i]     # [D]
-                        #     t3   = top3_neigh[i]         # [3, D]
-                        #     av   = avg_neigh[i]         # [D]
-
-                        #     print(f"\n=== Removed token idx={ridx}  (#{i}) ===")
-                        #     print("removed_state:", rs)
-                        #     for k in range(3):
-                        #         print(f" top3 neighbor[{k}]:", t3[k])
-                        #     print(" avg_top10:    ", av)
-                        # =======================
-
-                    # ==============================================================================
-
+                    """
                     # 然后执行真正的剪枝
                     #print("vit_before",hidden_states_pkg['hidden_states'].shape)
-                    hidden_states_pkg['hidden_states'] = orig_kept_states
-                    
+                    hidden_states_pkg['hidden_states'] = orig_states[keep_indexs,:]
                     rotary_pos_emb_pruned = rotary_pos_emb[keep_indexs,:]
                     #print("vit_after",hidden_states_pkg['hidden_states'].shape)
                     # …… 计算新的 cu_seqlens
@@ -2414,15 +2332,10 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     # 最后记下来这些供后面拼回用
                     self._sparse_vit_saved = {
                         "orig_seq_len": orig_seq_len,
-                        "keep_indexs": keep_indexs,
-                        "removed_indices": removed_indices,
-                        "removed_states": removed_states,
-                        "orig_kept_states": orig_kept_states,
-
-                        # 新增这行，R×10 的 LongTensor
-                        "rem_to_kept_idx":    rem_to_kept_idx,  
-                        "unique_idx": unique_idx,
-                        "inv_idx": inv_idx,
+                        #"keep_indexs": keep_indexs,
+                        #"removed_indices": removed_indices,
+                        #"removed_states": removed_states,
+                        #"orig_kept_states": orig_kept_states
                     }
 
                     
@@ -2450,61 +2363,24 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     #print("seq-len",orig_seq_len,cu_seqlens)
                 
                 
-                    
         # ------------------------END------------------------------------------
             #print("layer",blk.layer_idx)
-            '''修改kv的层数'''
-            #if hasattr(self, "_sparse_vit_saved") and blk.layer_idx < 32:
-            if hasattr(self, "_sparse_vit_saved") and blk.layer_idx < DART_config['vit_pruned_layer']+5:
+            #print(hasattr(self, "_sparse_vit_saved"),)
+            if hasattr(self, "_sparse_vit_saved"):
+                #print(self._sparse_vit_saved )
                 #print(hidden_states_pkg['hidden_states'].shape, cu_seqlens_pruned, rotary_pos_emb_pruned.shape)
-                #hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens_pruned, rotary_pos_emb=rotary_pos_emb_pruned, sparse_vit_saved=sparse_vit_saved)
-                hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb, sparse_vit_saved=self._sparse_vit_saved)
-            elif hasattr(self, "_sparse_vit_saved"):
                 hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens_pruned, rotary_pos_emb=rotary_pos_emb_pruned)
             else:
                 #print(hidden_states_pkg['hidden_states'].shape, cu_seqlens, rotary_pos_emb.shape)
                 hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
-
-            # -------- 拼回被剪的 token --------
-                
-            if blk.layer_idx == 32-1 and hasattr(self, "_sparse_vit_saved"):
-                saved = self._sparse_vit_saved
-                L, D = saved["orig_seq_len"], saved["removed_states"].size(1)
-                device = hidden_states_pkg['hidden_states'].device
-                
-                # 1) 拿出新旧 kept_states 与 rem_to_kept_idx
-                new_kept        = hidden_states_pkg['hidden_states']       # [K, D]
-                orig_kept       = saved["orig_kept_states"]               # [K, D]
-                rem_to_kept_idx = saved["rem_to_kept_idx"]                # [R, 10]
-                removed_indices = saved["removed_indices"]                # [R]
-                unique_idx = saved["unique_idx"]
-                inv_idx = saved["inv_idx"]
-
-                # 2) 只对 unique_idx 计算一次 delta
-                delta_unique = (new_kept[unique_idx] - orig_kept[unique_idx])              # [U, D]
-
-                # 3) 把 inv_idx reshape 回 (R, topk)，再 gather 并均值
-                inv_idx = inv_idx.view(rem_to_kept_idx.shape)                              # [R, topk]
-                #print("delta_unique",delta_unique[inv_idx].shape)
-                avg_delta_removed = delta_unique[inv_idx].mean(dim=1)                      # [R, D]
-
-                # 4) 准备 full_states 并写回
-                full_states = torch.zeros(L, D, device=device, dtype=new_kept.dtype)
-                full_states[saved["keep_indexs"]] = new_kept                                # fill kept
-                full_states[removed_indices]    = (saved["removed_states"] + avg_delta_removed)
-
-                # 5) 替换并清理
-                hidden_states_pkg['hidden_states'] = full_states
-                del self._sparse_vit_saved
-
-                # ----------------------------------------
             
-
+            if blk.layer_idx == 32-1 and hasattr(self, "_sparse_vit_saved"):
+                del self._sparse_vit_saved
         # ----------------------------------------
-        #if frame_counts !=0:
-        #    frame_counts = frame_counts/(self.config.spatial_merge_size**2)
+        if frame_counts !=0:
+            frame_counts = frame_counts/(self.config.spatial_merge_size**2)
         
-        return self.merger(hidden_states_pkg['hidden_states']) #, frame_counts
+        return self.merger(hidden_states_pkg['hidden_states']), frame_counts
         
     
     def get_retained_image_token(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
@@ -2746,51 +2622,6 @@ def plot_layer_states( states: np.ndarray,
     plt.close()
 
     print(f"[Saved] {save_path}")
-
-
-def plot_layer_states_cluster(
-    states: np.ndarray,
-    out_dir: str,
-    name: str,
-    cmap: str = 'rainbow',
-    labels: np.ndarray = None,   # 新增一个 labels 参数, 画每个cluster的分布
-):
-    """
-    states:     numpy array of shape (L, D)
-    out_dir:    存图的文件夹路径
-    name:       用于区分不同图的前缀/名称
-    cmap:       matplotlib 颜色映射
-    labels:     numpy array of shape (L,), 每个点的类别／颜色索引
-    """
-
-    os.makedirs(out_dir, exist_ok=True)
-
-    # 1. PCA 降到 2 维
-    pca    = PCA(n_components=2)
-    coords = pca.fit_transform(states)  # shape = (L, 2)
-
-    # 2. 准备 c
-    c = labels if labels is not None else np.arange(len(states))
-
-    # 3. 画散点图
-    plt.figure(figsize=(6, 6))
-    plt.scatter(coords[:, 0], coords[:, 1], c=c, cmap=cmap, s=8)
-    # 可选：如果要标号可以保留下面这段
-    #for i, (x, y) in enumerate(coords):
-    #    plt.text(x, y, str(i), fontsize=6, alpha=0.5)
-
-    plt.title(f"PCA of layer states ({name})")
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.tight_layout()
-
-    # 4. 保存
-    save_path = os.path.join(out_dir, f"{name}.png")
-    plt.savefig(save_path, dpi=150)
-    plt.close()
-
-    print(f"[Saved] {save_path}")
-
 
 class Qwen2RMSNorm_no_param(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):

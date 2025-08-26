@@ -2392,6 +2392,42 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                 
                     
         # ------------------------END------------------------------------------
+        
+            #==========================展示top10similarity=====================
+            # hidden_states: [N, D]
+            hs = hidden_states_pkg['hidden_states']      # 假设是 [seq_len, emb_dim]
+            N, D = hs.size()
+
+            with torch.no_grad():
+                # 1) 归一化到 unit‐vector
+                hs_norm = F.normalize(hs, p=2, dim=-1)   # [N, D]
+
+                # 2) 计算余弦相似度矩阵
+                sim = torch.mm(hs_norm, hs_norm.t())     # [N, N]
+
+                # 3) 屏蔽对角线（自己 vs 自己），否则总会拿到自己
+                sim.fill_diagonal_(-1.0)
+
+                # 4) 每行取 top10
+                topk_vals, topk_idx = sim.topk(10, dim=-1)  # largest=True 默认
+
+                # 5) 打印
+                #print("layer",blk.layer_idx)
+                # 计算所有 token 的 Top-10 相似度均值，结果形状 [10]
+                avg_top10 = topk_vals.mean(dim=0)   # 或者 .mean(dim=0, keepdim=True) 得到 [1,10]
+
+                # 打印
+                print(f"layer {blk.layer_idx} avg top-10 similarity:", avg_top10.tolist())
+
+                #for i in range(N):
+                #for i in range(10):
+                #    print(f"Token {i:3d} 最相似的 10 个 token：")
+                    #print(topk_vals[i])
+                    #for rank, (j, val) in enumerate(zip(topk_idx[i], topk_vals[i])):
+                    #    print(f"  第{rank+1:2d}：token {j.item():3d}, 相似度 = {val.item():.4f}")
+                   
+            # =============================================================================
+
             #print("layer",blk.layer_idx)
             if hasattr(self, "_sparse_vit_saved"):
                 #print(hidden_states_pkg['hidden_states'].shape, cu_seqlens_pruned, rotary_pos_emb_pruned.shape)
