@@ -1383,7 +1383,7 @@ class DART(Qwen2VLModel):
 
         device = hidden_states.device
         dtype = hidden_states.dtype
-        if self.config.DART_config is not None and self.config.DART_config['attn_scores_choose']:
+        if self.config.DART_config is not None and self.config.DART_config['Sparse'] and self.config.DART_config['attn_scores_choose']:
             self.update_layer(device,dtype)
 
         assert batch_size == 1, "batch_size > 1 requires changes to some implementation"
@@ -2038,62 +2038,63 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 # num_tokens_prev = input_ids.shape[1]
                 pixel_values = pixel_values.type(self.visual.get_dtype())
                 
+                #print("dartconfig",self.config.DART_config)
+                if self.config.DART_config is not None and self.config.DART_config['vit_Sparse']:
+                    # vision数量变化
+                    image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size**2
+                    # time_vit_end = time.time()
+                    #print("time_cost_vit", time_vit_end - time_vit_start)
+                    image_embeds.to(inputs_embeds.device)
+
+                    input_ids_new, retained_indices = _update_ids(input_ids, self.config.image_token_id, retained_nums)
+                    # image_mask = input_ids == self.config.image_token_id # [batch_size, seq_len]
+                    image_mask = input_ids_new == self.config.image_token_id
+                    inputs_embeds = inputs_embeds[:,retained_indices,:]
+                    # inputs_embeds = inputs_embeds.index_select(1, retained_indices.to(device=inputs_embeds.device)).contiguous() # TODO:验证是否为原地操作
+                    #print("CUDA memory after prunning inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
+                    if self.training:
+                        inputs_embeds = inputs_embeds.clone()
+                    inputs_embeds[image_mask] = image_embeds
+                    position_ids = position_ids[:,:,retained_indices]
+                    attention_mask = attention_mask[:,retained_indices]
+                    # num_tokens_new = input_ids_new.shape[1]
+                    #print("num_tokens_prev: ", num_tokens_prev," ---> ","num_tokens_new: ", num_tokens_new,"\n")
+                else:
                 
-                # vision数量变化
-                image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size**2
-                # time_vit_end = time.time()
-                #print("time_cost_vit", time_vit_end - time_vit_start)
-                image_embeds.to(inputs_embeds.device)
+                    # vision数量不变
+                    image_embeds, _ = self.visual(pixel_values, grid_thw=image_grid_thw)
+                    # time_vit_end = time.time()
+                    #print("time_cost_vit", time_vit_end - time_vit_start)
+                    image_embeds.to(inputs_embeds.device)
 
-                input_ids_new, retained_indices = _update_ids(input_ids, self.config.image_token_id, retained_nums)
-                # image_mask = input_ids == self.config.image_token_id # [batch_size, seq_len]
-                image_mask = input_ids_new == self.config.image_token_id
-                inputs_embeds = inputs_embeds[:,retained_indices,:]
-                # inputs_embeds = inputs_embeds.index_select(1, retained_indices.to(device=inputs_embeds.device)).contiguous() # TODO:验证是否为原地操作
-                #print("CUDA memory after prunning inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
-                if self.training:
-                    inputs_embeds = inputs_embeds.clone()
-                inputs_embeds[image_mask] = image_embeds
-                position_ids = position_ids[:,:,retained_indices]
-                attention_mask = attention_mask[:,retained_indices]
-                # num_tokens_new = input_ids_new.shape[1]
-                #print("num_tokens_prev: ", num_tokens_prev," ---> ","num_tokens_new: ", num_tokens_new,"\n")
-                '''
-
-                # vision数量不变
-                image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
-                # time_vit_end = time.time()
-                #print("time_cost_vit", time_vit_end - time_vit_start)
-                image_embeds.to(inputs_embeds.device)
-
-                image_mask = input_ids == self.config.image_token_id
-                if self.training:
-                    inputs_embeds = inputs_embeds.clone()
-                # 把 image_embeds填入这些 <image> token 的 embedding 位置：
-                inputs_embeds[image_mask] = image_embeds
-                '''
+                    image_mask = input_ids == self.config.image_token_id
+                    if self.training:
+                        inputs_embeds = inputs_embeds.clone()
+                    # 把 image_embeds填入这些 <image> token 的 embedding 位置：
+                    inputs_embeds[image_mask] = image_embeds
+                    
                 
             if pixel_values_videos is not None:
                 pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
                 
-                
-                # vision数量变化
-                video_embeds, retained_nums = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
-                video_embeds.to(inputs_embeds.device)
-                input_ids_new, retained_indices = _update_ids(input_ids, self.config.video_token_id, retained_nums)
-                #video_mask = input_ids == self.config.video_token_id
-                video_mask = input_ids_new == self.config.video_token_id
-                inputs_embeds = inputs_embeds[:,retained_indices,:]
-                inputs_embeds[video_mask] = video_embeds
-                position_ids = position_ids[:,:,retained_indices]
-                attention_mask = attention_mask[:,retained_indices]
-                '''
-                # vision数量不变
-                video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
-                video_embeds.to(inputs_embeds.device)
-                video_mask = input_ids == self.config.video_token_id
-                inputs_embeds[video_mask] = video_embeds
-                '''
+                if self.config.DART_config is not None and self.config.DART_config['vit_Sparse']:
+                    # vision数量变化
+                    video_embeds, retained_nums = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
+                    video_embeds.to(inputs_embeds.device)
+                    input_ids_new, retained_indices = _update_ids(input_ids, self.config.video_token_id, retained_nums)
+                    #video_mask = input_ids == self.config.video_token_id
+                    video_mask = input_ids_new == self.config.video_token_id
+                    inputs_embeds = inputs_embeds[:,retained_indices,:]
+                    inputs_embeds[video_mask] = video_embeds
+                    position_ids = position_ids[:,:,retained_indices]
+                    attention_mask = attention_mask[:,retained_indices]
+                else:
+                    # vision数量不变
+                    video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
+                    video_embeds.to(inputs_embeds.device)
+                    video_mask = input_ids == self.config.video_token_id
+                    inputs_embeds[video_mask] = video_embeds
+                    
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
@@ -2247,7 +2248,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0) # [1+总帧数] 记录不同帧图像的始末索引信息
         device = hidden_states.device
         dtype = hidden_states.dtype
-        if self.config.DART_config is not None and self.config.DART_config['vit_attn_scores_choose']:
+        if self.config.DART_config is not None and self.config.DART_config['vit_Sparse'] and self.config.DART_config['vit_attn_scores_choose']:
             self.update_vision_block(device,dtype)
         #--------------------BEGIN------------------------------------
         hidden_states_pkg = {'hidden_states':hidden_states, # [seq_len, embed_dim]

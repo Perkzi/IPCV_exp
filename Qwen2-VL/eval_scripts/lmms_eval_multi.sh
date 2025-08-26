@@ -54,7 +54,7 @@ for task in "${tasks[@]}"; do
           vit_attn_scores_choose=False
           vit_diff_choose=True
           vit_pivot_sim_choose=False
-          
+
           GPU=4
 
 
