@@ -1359,6 +1359,9 @@ class DART(Qwen2VLModel):
         self.last_attention = None
         super().__init__(config)
         self.config = config
+
+        self.update_attention_layer=False
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -1424,8 +1427,11 @@ class DART(Qwen2VLModel):
 
         device = hidden_states.device
         dtype = hidden_states.dtype
-        if self.config.DART_config is not None and self.config.DART_config['attn_scores_choose']:
+
+        if self.config.DART_config is not None and self.config.DART_config['Sparse'] and self.config.DART_config['attn_scores_choose']\
+            and not self.update_attention_layer:
             self.update_layer(device,dtype)
+            self.update_attention_layer=True
 
         assert batch_size == 1, "batch_size > 1 requires changes to some implementation"
 
@@ -2279,6 +2285,8 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         self.last_attention = None
         self.config = config
         self.norm = Qwen2RMSNorm_no_param(config.embed_dim, eps=config.rms_norm_eps)
+
+        self.update_attention_layer=False
     
     def forward(self, hidden_states: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         # hidden_states [grid_t * grid_h * grid_w, 
@@ -2293,8 +2301,13 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0) # [1+总帧数] 记录不同帧图像的始末索引信息
         device = hidden_states.device
         dtype = hidden_states.dtype
-        if self.config.DART_config is not None and self.config.DART_config['vit_attn_scores_choose']:
+
+        if self.config.DART_config is not None and self.config.DART_config['vit_Sparse'] and self.config.DART_config['vit_attn_scores_choose']\
+            and not self.update_attention_layer:
             self.update_vision_block(device,dtype)
+            self.update_attention_layer=True
+
+        
         #--------------------BEGIN------------------------------------
         hidden_states_pkg = {'hidden_states':hidden_states, # [seq_len, embed_dim]
                             'k_states':None,                # [seq_len, num_heads, head_dim]  TODO:优化显存占用
