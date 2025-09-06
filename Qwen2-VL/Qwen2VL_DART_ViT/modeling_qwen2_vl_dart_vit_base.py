@@ -1,5 +1,6 @@
 '''
-剪掉的token，在某一层恢复,加上所有保留token的变化均值
+可以选择是否在ViT或者LLM剪枝
+如果ViT剪掉了token，在LLM不恢复
 '''
 
 # coding=utf-8
@@ -2043,6 +2044,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             inputs_embeds = self.model.embed_tokens(input_ids) # [batch_size, seq_len, hidden_size]
             #print("CUDA memory after creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             if pixel_values is not None:
+                #print("pixelvalue", pixel_values.shape)
                 # time_vit_start = time.time()
                 # num_tokens_prev = input_ids.shape[1]
                 pixel_values = pixel_values.type(self.visual.get_dtype())

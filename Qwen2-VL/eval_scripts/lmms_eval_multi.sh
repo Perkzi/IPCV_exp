@@ -2,15 +2,15 @@
 #!/bin/bash
 
 # ������������
-# tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "textvqa")  # ʾ�������б�
+# tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "seedbench" "vqav2" "textvqa" "vizwiz_vqa" "ocrbench")  # ʾ�������б�
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
 tasks=("mmbench_en")
-pruned_layers=(2)
+pruned_layers=(3)
 reduction_ratios=(0.8)
-vit_pruned_layers=(6)
-vit_reduction_ratios=(0.5)
+vit_pruned_layers=( 3)
+vit_reduction_ratios=(0.8)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -35,8 +35,8 @@ for task in "${tasks[@]}"; do
           output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           mkdir -p "$output_path"
 
-          Sparse=False # 如果测试modeling_qwen2_vl_dart_vit_base或者在主模型不打算prune，改为False
-          vit_Sparse=True
+          Sparse=True # 如果测试modeling_qwen2_vl_dart_vit_base或者在主模型不打算prune，改为False
+          vit_Sparse=False
           image_token_start_index=0
           image_token_length=0
           max_num_trunction=128
@@ -45,17 +45,17 @@ for task in "${tasks[@]}"; do
 
           # 修改在主模型上的剪枝方法
           random_choose=False
-          attn_scores_choose=True
+          attn_scores_choose=False
           diff_choose=False
           pivot_sim_choose=False
 
           # 修改在vit上的剪枝方法
           vit_random_choose=False
-          vit_attn_scores_choose=True
+          vit_attn_scores_choose=False
           vit_diff_choose=False
           vit_pivot_sim_choose=False
 
-          GPU=4
+          GPU=1
 
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \

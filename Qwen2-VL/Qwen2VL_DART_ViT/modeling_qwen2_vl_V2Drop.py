@@ -1,8 +1,5 @@
 '''
-TODO:在第k层减去一部分token，同时对每个被减去的token，从保留的token里找出最相似的10个token
-在被剪掉的层，被剪掉的token加上top10相似token的变化均值（不更新原来的hiddenstate，在每一层都重新计算），只用来做完整的attention
-剪掉的token，在最后一层（32-1）恢复,加上top10相似token的变化均值
-
+llm剪枝 V2Drop实现
 '''
 
 # coding=utf-8
@@ -38,7 +35,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch.nn import CrossEntropyLoss, LayerNorm
-from sklearn.cluster import KMeans
 
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, StaticCache
@@ -385,54 +381,17 @@ class Qwen2VLVisionBlock(nn.Module):
         mlp_hidden_dim = int(config.embed_dim * config.mlp_ratio)
         self.layer_idx = layer_idx
 
-        # 计算量 4*D²·L + D·L²  D=1280
         self.attn = QWEN2_VL_VISION_ATTENTION_CLASSES[attn_implementation](
             config.embed_dim, num_heads=config.num_heads,
         )
-        #print("mlp dim",config.embed_dim,mlp_hidden_dim) # mlp dim 1280 5120
-        # 计算量 8LD² seq_len * 1280 * 5120 * 2  约为attention的8/5倍
         self.mlp = VisionMlp(dim=config.embed_dim, hidden_dim=mlp_hidden_dim, hidden_act=config.hidden_act)
 
-    def forward(self, hidden_states_pkg : dict, cu_seqlens, rotary_pos_emb,sparse_vit_saved=None) -> torch.Tensor:
-        if sparse_vit_saved is not None:
-            # 加上变化量并拼接
-            saved = sparse_vit_saved
-            L, D = saved["orig_seq_len"], saved["removed_states"].size(1)
-            device = hidden_states_pkg['hidden_states'].device
-
-            # 1) 拿出新旧 kept_states 与 rem_to_kept_idx
-            new_kept        = hidden_states_pkg['hidden_states']       # [K, D]
-            orig_kept       = saved["orig_kept_states"]               # [K, D]
-            rem_to_kept_idx = saved["rem_to_kept_idx"]                # [R, 10]
-            removed_indices = saved["removed_indices"]                # [R]
-            unique_idx = saved["unique_idx"]
-            inv_idx = saved["inv_idx"]
-
-            # 2) 只对 unique_idx 计算一次 delta
-            delta_unique = (new_kept[unique_idx] - orig_kept[unique_idx])              # [U, D]
-
-            # 3) 把 inv_idx reshape 回 (R, topk)，再 gather 并均值
-            inv_idx = inv_idx.view(rem_to_kept_idx.shape)                              # [R, topk]
-            #print("delta_unique",delta_unique[inv_idx].shape)
-            avg_delta_removed = delta_unique[inv_idx].mean(dim=1)                      # [R, D]
-            
-            # 4) 准备 full_states 并写回
-            hidden_states = torch.zeros(L, D, device=device, dtype=new_kept.dtype)
-            hidden_states[saved["keep_indexs"]] = new_kept                                # fill kept
-            hidden_states[removed_indices]    = (saved["removed_states"] + avg_delta_removed)
-        else:
-            hidden_states = hidden_states_pkg['hidden_states']
-
+    def forward(self, hidden_states_pkg : dict, cu_seqlens, rotary_pos_emb) -> torch.Tensor:
+        hidden_states = hidden_states_pkg['hidden_states']
         output = self.attn(
             self.norm1(hidden_states), cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb
         )
         hidden_states = hidden_states + output['attn_output']
-
-
-        if sparse_vit_saved is not None:
-            # 重新裁剪
-            hidden_states = hidden_states[saved["keep_indexs"]]
-
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
         return {'hidden_states':hidden_states,
                 'k_states':output['k_states'],
@@ -1428,6 +1387,7 @@ class DART(Qwen2VLModel):
         device = hidden_states.device
         dtype = hidden_states.dtype
 
+        # 只触发一次
         if self.config.DART_config is not None and self.config.DART_config['Sparse'] and self.config.DART_config['attn_scores_choose']\
             and not self.update_attention_layer:
             self.update_layer(device,dtype)
@@ -1435,6 +1395,14 @@ class DART(Qwen2VLModel):
 
         assert batch_size == 1, "batch_size > 1 requires changes to some implementation"
 
+        target_layer_indices = {3,17,22}
+        prev_target_layers = {2, 16, 21}
+
+        DART_config = self.config.DART_config
+        image_token_start_index = DART_config['image_token_start_index']
+        image_token_length = DART_config['image_token_length']
+        #pruned_image_token_length = image_token_length
+        
         for i, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -1455,18 +1423,18 @@ class DART(Qwen2VLModel):
                 # {'Sparse': True, 'K': 2, 'image_token_start_index': 15,
                 #  'image_token_length': 1316, 'max_num_trunction': 128,
                 #  'reduction_ratio': 0.778, 'pivot_image_token': 4, 'pivot_text_token': 4}
-                DART_config = self.config.DART_config
                 if DART_config is not None and DART_config['Sparse']:
-                    K = DART_config['pruned_layer']  # pruned layer
-                    image_token_start_index = DART_config['image_token_start_index']
-                    image_token_length = DART_config['image_token_length']
+                    #K = DART_config['pruned_layer']  # pruned layer
+                    
                     #print("image_token_length",image_token_length)
                     
-                    if K-1>0 and decoder_layer.self_attn.layer_idx ==K-1 and DART_config['diff_choose'] and layer_outputs['hidden_states'].shape[1]>1:
+                    if decoder_layer.self_attn.layer_idx in prev_target_layers:
+                        #print("prev",decoder_layer.self_attn.layer_idx)
                         hidden_states_prev = layer_outputs['hidden_states'][0] # K-1层的输入
 
-                    if decoder_layer.self_attn.layer_idx == K and seq_length > 1:
+                    if decoder_layer.self_attn.layer_idx in target_layer_indices and seq_length > 1:
                         device = hidden_states.device
+                        seq_length = layer_outputs['hidden_states'].shape[1]
 
                         #last_layer_state = layer_outputs[0]  # 上一层的输出
                         last_layer_state = layer_outputs['hidden_states'].detach().clone()
@@ -1481,38 +1449,32 @@ class DART(Qwen2VLModel):
                         #print("token index",last_layer_state.shape, k_states.shape)#,retained_image_tokens_index.shape)
                         #token index torch.Size([1, 1378, 3584]) torch.Size([1, 28, 1378, 128]) torch.Size([292])
 
-                        if DART_config['attn_scores_choose']:
-                            attn_scores = layer_outputs['attn_scores']
-                            retained_image_tokens_index = self.get_retained_image_token_attn_scores(
-                                self.config, last_layer_state, k_states,attn_scores).to(device)
-                            del layer_outputs['attn_scores']
-                            del attn_scores
-                            torch.cuda.synchronize()
-                            gc.collect()
-                            torch.cuda.empty_cache()
-                            # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
-                        elif DART_config['random_choose']:
-                            # 随机选取
-                            retained_image_tokens_index = self.get_retained_image_token_random(
-                                self.config, last_layer_state, k_states).to(device)
-                            
-                        elif DART_config['diff_choose']:
-                            hidden_states_cur = layer_outputs['hidden_states'][0] # K-1层的输出，即K层的输入
-                            retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+                        hidden_states_cur = layer_outputs['hidden_states'][0] # K-1层的输出，即K层的输入
 
-                        elif DART_config['pivot_sim_choose']:
-                            retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
-                        else:
-                            retained_image_tokens_index = self.get_retained_image_token(
-                                self.config, last_layer_state, k_states).to(device)
+                        current_layer = decoder_layer.self_attn.layer_idx
+                        reduction_ratio = DART_config['reduction_ratio']
+                        # if current_layer == 3:
+                        #     keep_ratio = 0.5
+                        # if current_layer == 17:
+                        #     keep_ratio = 0.5
+                        if current_layer == 22:
+                            reduction_ratio = 1
+
+                        retained_image_tokens_index = self.get_retained_image_token_V2Drop(self.config,hidden_states_cur,hidden_states_prev,last_layer_state,reduction_ratio,image_token_length)
+
+                        
+                        
 
                         #print("start index",image_token_start_index,retained_image_tokens_index.sort().values,image_token_start_index+image_token_length)
                         
                         keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index, torch.arange(image_token_start_index+image_token_length,seq_length,device=device)))
+                        
                         #print("retained image",retained_image_tokens_index.shape,"keep_indexs",keep_indexs.shape)
-                        #print("token len",last_layer_state.shape,keep_indexs.shape,image_token_length)
                         # sort index
                         keep_indexs = keep_indexs.sort().values
+
+                        image_token_length = retained_image_tokens_index.shape[0]
+
 
                         hidden_states = hidden_states[:,keep_indexs,:]
                         #print("1",hidden_states.shape,cache_position.shape)#torch.Size([1, 354, 3584]) torch.Size([1378])
@@ -1528,6 +1490,7 @@ class DART(Qwen2VLModel):
                         #print("po",position_ids.shape,keep_indexs.shape)#torch.Size([3, 1, 1378]) torch.Size([354])
                         position_ids = position_ids[:, :, keep_indexs]
                         #print(causal_mask,position_ids.shape)None torch.Size([3, 1, 354])
+                    #print("layer",decoder_layer.self_attn.layer_idx,hidden_states.shape)
 
                 layer_outputs = decoder_layer(
                     hidden_states,
@@ -1549,9 +1512,7 @@ class DART(Qwen2VLModel):
             if output_attentions:
                 #all_self_attns += (layer_outputs[1],)
                 all_self_attns += layer_outputs['attn_scores']
-        #print("hid",hidden_states.shape)
-        # hid torch.Size([1, 1157, 3584])
-        # hid torch.Size([1, 1, 3584])
+
         hidden_states = self.norm(hidden_states) # 层归一化
 
         # add hidden states from the last decoder layer
@@ -1570,55 +1531,6 @@ class DART(Qwen2VLModel):
             attentions=all_self_attns,
         )
     
-    def get_retained_image_token(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
-        #获取保留的index
-        DART_config = config.DART_config
-        #K = DART_config['K']  # pruned layer
-        image_token_start_index = DART_config['image_token_start_index']
-        image_token_length = DART_config['image_token_length']
-
-        pivot_image_token = DART_config['pivot_image_token']
-        pivot_text_token = DART_config['pivot_text_token']
-
-        reduction_ratio = DART_config['reduction_ratio']
-        TOKEN_TOPK = int(image_token_length * (1 - reduction_ratio) / (pivot_image_token + pivot_text_token))
-        #print("topk",TOKEN_TOPK,image_token_length,pivot_image_token,pivot_text_token) #topk 36 1316 4 4
-        device = last_layer_state.device
-
-        any_states = any_states.permute(0, 2, 1, 3).reshape(any_states.shape[0], any_states.shape[2], -1)[0]
-        #print("key_states",any_states.shape)#torch.Size([1378, 3584])
-
-        k_states_image_token = any_states[image_token_start_index:image_token_start_index + image_token_length, :]#image token之前的是system？
-        k_states_query_token = any_states[image_token_start_index + image_token_length:, :]
-
-        k_states_image_token_L1_norm = torch.norm(k_states_image_token, p=1, dim=-1)
-        k_states_query_token_L1_norm = torch.norm(k_states_query_token, p=1, dim=-1)
-
-        image_indices = (k_states_image_token_L1_norm.topk(pivot_image_token).indices + image_token_start_index).tolist() 
-        query_indices = (k_states_query_token_L1_norm.topk(pivot_text_token).indices + image_token_start_index + image_token_length).tolist()
-        indices_set = set(image_indices + query_indices)#图像和文本各选几个pivot
-
-        valid_indices = set(range(image_token_start_index, image_token_start_index + image_token_length)) - set(image_indices)  #但还是只在图像里剪枝
-
-        valid_indices_list = list(valid_indices)  
-
-        for item in list(indices_set):
-            valid_vectors = last_layer_state[0][valid_indices_list, :]
-            cos_sim = -torch.nn.functional.cosine_similarity(last_layer_state[0][item, :], valid_vectors, dim=-1)
-            top_k_indices = cos_sim.topk(TOKEN_TOPK).indices
-
-            top_k_real_indices = [valid_indices_list[i] for i in top_k_indices]
-            indices_set.update(top_k_real_indices)
-            
-            valid_indices.difference_update(top_k_real_indices) #等价于valid_indices = valid_indices - set(top_k_real_indices)
-            valid_indices_list = list(valid_indices)  
-
-        indices_set.difference_update(query_indices)
-
-        retained_image_tokens_index = torch.tensor(list(indices_set), device=device)
-
-        return retained_image_tokens_index
-   
 
     def get_retained_image_token_random(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
         DART_config = config.DART_config
@@ -1664,15 +1576,38 @@ class DART(Qwen2VLModel):
         #print(retained_image_tokens_index.shape)
         return retained_image_tokens_index
 
-    def get_retained_image_token_diff(self,config,hidden_states_prev,hidden_states_cur,last_layer_state):
+    def get_retained_image_token_V2Drop(self,config,hidden_states_prev,hidden_states_cur,last_layer_state, reduction_ratio, image_token_length):
+        DART_config = config.DART_config
+        #K = DART_config['K']
+        image_token_start_index = DART_config['image_token_start_index']
+
+        #reduction_ratio = DART_config['reduction_ratio']
+        # 计算原始值
+        TOKEN_TOPK = max(1,int(image_token_length * (1 - reduction_ratio)))
+
+        # # 向下取
+        # TOKEN_TOPK = TOKEN_TOPK_down - 1
+        device = last_layer_state.device
+
+        # 方法一：改用余弦相似度
+        cos_sim = F.cosine_similarity(
+            hidden_states_cur, hidden_states_prev, dim=-1
+        )[image_token_start_index : image_token_start_index+image_token_length]
+        topk_idx = torch.topk(cos_sim, k=TOKEN_TOPK, largest=False).indices
+
+        top_k_real_indices = topk_idx + image_token_start_index
+        retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device) 
+        return retained_image_tokens_index
+    
+    def get_retained_image_token_diff(self,config,hidden_states_prev,hidden_states_cur,last_layer_state, reduction_ratio):
         DART_config = config.DART_config
         #K = DART_config['K']
         image_token_start_index = DART_config['image_token_start_index']
         image_token_length = DART_config['image_token_length']
 
-        reduction_ratio = DART_config['reduction_ratio']
+        #reduction_ratio = DART_config['reduction_ratio']
         # 计算原始值
-        TOKEN_TOPK = int(image_token_length * (1 - reduction_ratio))
+        TOKEN_TOPK = max(1,int(image_token_length * (1 - reduction_ratio)))
 
         # # 向下取
         # TOKEN_TOPK = TOKEN_TOPK_down - 1
@@ -1706,7 +1641,7 @@ class DART(Qwen2VLModel):
         retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device) 
         return retained_image_tokens_index
 
-    def update_layer(self, device, dtype):
+    def update_layer(self, device=None, dtype=None):
         # 获取需要替换的层索引
         k = self.config.DART_config['pruned_layer'] - 1
         if k<0 : return 
@@ -1717,7 +1652,9 @@ class DART(Qwen2VLModel):
             self.config,
             layer_idx=k,
             attn_implementation='eager'
-        ).to(device=device, dtype=dtype)
+        )
+        if device is not None and dtype is not None:
+            new_block = new_block.to(device=device, dtype=dtype)
         # 尝试复制参数（尽可能匹配）
         missing_keys, unexpected_keys = new_block.load_state_dict(
             old_block.state_dict(),
@@ -2084,65 +2021,68 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             inputs_embeds = self.model.embed_tokens(input_ids) # [batch_size, seq_len, hidden_size]
             #print("CUDA memory after creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             if pixel_values is not None:
+                #print("pixelvalue", pixel_values.shape)
                 # time_vit_start = time.time()
                 # num_tokens_prev = input_ids.shape[1]
                 pixel_values = pixel_values.type(self.visual.get_dtype())
                 
-                '''
-                # vision数量变化
-                image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size**2
-                # time_vit_end = time.time()
-                #print("time_cost_vit", time_vit_end - time_vit_start)
-                image_embeds.to(inputs_embeds.device)
+                #print("dartconfig",self.config.DART_config)
+                if self.config.DART_config is not None and self.config.DART_config['vit_Sparse']:
+                    # vision数量变化
+                    image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size**2
+                    # time_vit_end = time.time()
+                    #print("time_cost_vit", time_vit_end - time_vit_start)
+                    image_embeds.to(inputs_embeds.device)
 
-                input_ids_new, retained_indices = _update_ids(input_ids, self.config.image_token_id, retained_nums)
-                # image_mask = input_ids == self.config.image_token_id # [batch_size, seq_len]
-                image_mask = input_ids_new == self.config.image_token_id
-                inputs_embeds = inputs_embeds[:,retained_indices,:]
-                # inputs_embeds = inputs_embeds.index_select(1, retained_indices.to(device=inputs_embeds.device)).contiguous() # TODO:验证是否为原地操作
-                #print("CUDA memory after prunning inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
-                if self.training:
-                    inputs_embeds = inputs_embeds.clone()
-                inputs_embeds[image_mask] = image_embeds
-                position_ids = position_ids[:,:,retained_indices]
-                attention_mask = attention_mask[:,retained_indices]
-                # num_tokens_new = input_ids_new.shape[1]
-                #print("num_tokens_prev: ", num_tokens_prev," ---> ","num_tokens_new: ", num_tokens_new,"\n")
-                '''
+                    input_ids_new, retained_indices = _update_ids(input_ids, self.config.image_token_id, retained_nums)
+                    # image_mask = input_ids == self.config.image_token_id # [batch_size, seq_len]
+                    image_mask = input_ids_new == self.config.image_token_id
+                    inputs_embeds = inputs_embeds[:,retained_indices,:]
+                    # inputs_embeds = inputs_embeds.index_select(1, retained_indices.to(device=inputs_embeds.device)).contiguous() # TODO:验证是否为原地操作
+                    #print("CUDA memory after prunning inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
+                    if self.training:
+                        inputs_embeds = inputs_embeds.clone()
+                    inputs_embeds[image_mask] = image_embeds
+                    position_ids = position_ids[:,:,retained_indices]
+                    attention_mask = attention_mask[:,retained_indices]
+                    # num_tokens_new = input_ids_new.shape[1]
+                    #print("num_tokens_prev: ", num_tokens_prev," ---> ","num_tokens_new: ", num_tokens_new,"\n")
+                else:
+                
+                    # vision数量不变
+                    image_embeds, _ = self.visual(pixel_values, grid_thw=image_grid_thw)
+                    # time_vit_end = time.time()
+                    #print("time_cost_vit", time_vit_end - time_vit_start)
+                    image_embeds.to(inputs_embeds.device)
 
-                # vision数量不变
-                image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
-                # time_vit_end = time.time()
-                #print("time_cost_vit", time_vit_end - time_vit_start)
-                image_embeds.to(inputs_embeds.device)
-
-                image_mask = input_ids == self.config.image_token_id
-                if self.training:
-                    inputs_embeds = inputs_embeds.clone()
-                # 把 image_embeds填入这些 <image> token 的 embedding 位置：
-                inputs_embeds[image_mask] = image_embeds
+                    image_mask = input_ids == self.config.image_token_id
+                    if self.training:
+                        inputs_embeds = inputs_embeds.clone()
+                    # 把 image_embeds填入这些 <image> token 的 embedding 位置：
+                    inputs_embeds[image_mask] = image_embeds
+                    
                 
             if pixel_values_videos is not None:
                 pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
                 
-                '''
-                # vision数量变化
-                video_embeds, retained_nums = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
-                video_embeds.to(inputs_embeds.device)
-                input_ids_new, retained_indices = _update_ids(input_ids, self.config.video_token_id, retained_nums)
-                #video_mask = input_ids == self.config.video_token_id
-                video_mask = input_ids_new == self.config.video_token_id
-                inputs_embeds = inputs_embeds[:,retained_indices,:]
-                inputs_embeds[video_mask] = video_embeds
-                position_ids = position_ids[:,:,retained_indices]
-                attention_mask = attention_mask[:,retained_indices]
-                '''
-                # vision数量不变
-                video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
-                video_embeds.to(inputs_embeds.device)
-                video_mask = input_ids == self.config.video_token_id
-                inputs_embeds[video_mask] = video_embeds
-                
+                if self.config.DART_config is not None and self.config.DART_config['vit_Sparse']:
+                    # vision数量变化
+                    video_embeds, retained_nums = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
+                    video_embeds.to(inputs_embeds.device)
+                    input_ids_new, retained_indices = _update_ids(input_ids, self.config.video_token_id, retained_nums)
+                    #video_mask = input_ids == self.config.video_token_id
+                    video_mask = input_ids_new == self.config.video_token_id
+                    inputs_embeds = inputs_embeds[:,retained_indices,:]
+                    inputs_embeds[video_mask] = video_embeds
+                    position_ids = position_ids[:,:,retained_indices]
+                    attention_mask = attention_mask[:,retained_indices]
+                else:
+                    # vision数量不变
+                    video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
+                    video_embeds.to(inputs_embeds.device)
+                    video_mask = input_ids == self.config.video_token_id
+                    inputs_embeds[video_mask] = video_embeds
+                    
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
@@ -2161,10 +2101,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
         logits = logits.float()
-        
-        # print("labels",labels is not None ,return_dict,logits.shape)
-        # labels False True torch.Size([1, 1157, 152064])
-        # labels False True torch.Size([1, 1, 152064])
+
         loss = None
         if labels is not None:
             # Shift so that tokens < n predict n
@@ -2279,7 +2216,6 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         return model_inputs
 
 
-
 class DART_ViT(Qwen2VisionTransformerPretrainedModel):
     def __init__(self, config:Qwen2VLVisionConfig):
         super().__init__(config)
@@ -2302,13 +2238,12 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0) # [1+总帧数] 记录不同帧图像的始末索引信息
         device = hidden_states.device
         dtype = hidden_states.dtype
-
+        
         if self.config.DART_config is not None and self.config.DART_config['vit_Sparse'] and self.config.DART_config['vit_attn_scores_choose']\
             and not self.update_attention_layer:
             self.update_vision_block(device,dtype)
             self.update_attention_layer=True
 
-        
         #--------------------BEGIN------------------------------------
         hidden_states_pkg = {'hidden_states':hidden_states, # [seq_len, embed_dim]
                             'k_states':None,                # [seq_len, num_heads, head_dim]  TODO:优化显存占用
@@ -2322,58 +2257,43 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         seq_len = hidden_states_pkg['hidden_states'].shape[0]
         rand_idx = random.randrange(seq_len)
         #--------------
+        target_layer_indices = {3}
         for i, blk in enumerate(self.blocks):
             DART_config = self.config.DART_config
             #print("dartconfig",DART_config)
             if DART_config is not None and DART_config['vit_Sparse']:
-                K = DART_config['vit_pruned_layer']
+                #K = DART_config['vit_pruned_layer']
                 #image_token_start_index = DART_config['image_token_start_index']
                 #image_token_length = DART_config['image_token_length']
                 seq_len = hidden_states_pkg['hidden_states'].shape[0]
                 
-                if K-1>0 and blk.layer_idx ==K-1 and DART_config['vit_diff_choose'] and hidden_states_pkg['hidden_states'].shape[0]>1:
+                if blk.layer_idx+1 in target_layer_indices and hidden_states_pkg['hidden_states'].shape[0]>1:
                     hidden_states_prev = hidden_states_pkg['hidden_states'] # K-1层的输入
                 #print("layer_idx",blk.layer_idx, hidden_states_pkg['hidden_states'].shape)
-                if blk.layer_idx == K and hidden_states_pkg['hidden_states'].shape[0]>1:
+
+                
+                if blk.layer_idx in target_layer_indices and hidden_states_pkg['hidden_states'].shape[0]>1:
                     device = hidden_states_pkg['hidden_states'].device
                     last_layer_state = hidden_states_pkg['hidden_states'].detach().clone()
                     last_layer_state = self.norm(last_layer_state)
                     k_states = hidden_states_pkg['k_states']  
                     attn_scores = hidden_states_pkg['attn_scores']
 
-                    if DART_config['vit_attn_scores_choose']:
-                        retained_image_tokens_index = self.get_retained_image_token_attn_scores(
-                            self.config, last_layer_state, k_states,attn_scores).to(device)
-                        del hidden_states_pkg['attn_scores']
-                        del attn_scores
-                        torch.cuda.synchronize()
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
-                    elif DART_config['vit_random_choose']:
-                        # 随机选取
-                        retained_image_tokens_index = self.get_retained_image_token_random(
-                            self.config, last_layer_state, k_states).to(device)
-                    elif DART_config['vit_diff_choose']:
-                        hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
-                        retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+                    hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
+                    retained_image_tokens_index = self.get_retained_image_token_V2Drop(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
 
-                    elif DART_config['vit_pivot_sim_choose']:
-                        retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
-                    else:
-                        retained_image_tokens_index = self.get_retained_image_token(
-                            self.config, last_layer_state, k_states).to(device)
+                    
 
                     # keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index,torch.arange(image_token_start_index+image_token_length,seq_len,device=device)))
                     #keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index))
                     # sort index
                     keep_indexs = retained_image_tokens_index.sort().values
-                    #print("token len",last_layer_state.shape,keep_indexs.shape)
 
 
                     # **在这里保存原始序列长度、原始 hidden_states，以及 removed 索引和它们对应的向量**
                     orig_seq_len = hidden_states_pkg['hidden_states'].shape[0]
                     orig_states = hidden_states_pkg['hidden_states'].detach().clone()
+                    """
                     removed_mask = torch.ones(orig_seq_len, dtype=torch.bool, device=device)
                     removed_mask[keep_indexs] = False
                     removed_indices = torch.nonzero(removed_mask, as_tuple=False).view(-1)
@@ -2381,47 +2301,10 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     #print("remove state",removed_states.shape)
                     # 保留下来的 states
                     orig_kept_states = orig_states[keep_indexs, :].clone()
-
-                    # ========== TODO: 计算每个 removed token 在 kept_states 里的 10 最近邻 ==========
-                    # 这里用 Euclidean 距离，也可改成余弦或别的度量
-                    with torch.no_grad():
-                        # p=2.0             ：指定用 L2 范数（Euclidean，p=2）；如果 p=1 则是 L1 距离，p=∞ 则是 Chebyshev 距离，等等
-                        # 输出 dists       ：shape=[R, K]，其中 dists[i,j] 是 removed_states[i] 和 orig_kept_states[j] 的 p‐范数距离
-                        # pairwise distance: [R, K]
-                        dists = torch.cdist(removed_states, orig_kept_states, p=2.0)
-                        # topk 最小距离对应的 kept_states 索引： [R, 10]
-                        _, rem_to_kept_idx = dists.topk(10, largest=False, dim=1)
-
-                        flat_idx = rem_to_kept_idx.view(-1)                                        # [R*topk]
-                        unique_idx, inv_idx = torch.unique(flat_idx, return_inverse=True)          # unique_idx:[U], inv_idx:[R*topk]
-                        #print("unique_idx",flat_idx,unique_idx,inv_idx)
-
-
-
-                        # =============打印=====
-                        # neigh_states = orig_kept_states[rem_to_kept_idx]  
-                        # avg_neigh = neigh_states.mean(dim=1)            
-                        # top3_neigh = neigh_states[:, :3, :]            
-                        # num_show = min(5, removed_states.size(0))
-                        # for i in range(num_show):
-                        #     ridx = removed_indices[i].item()
-                        #     rs   = removed_states[i]     # [D]
-                        #     t3   = top3_neigh[i]         # [3, D]
-                        #     av   = avg_neigh[i]         # [D]
-
-                        #     print(f"\n=== Removed token idx={ridx}  (#{i}) ===")
-                        #     print("removed_state:", rs)
-                        #     for k in range(3):
-                        #         print(f" top3 neighbor[{k}]:", t3[k])
-                        #     print(" avg_top10:    ", av)
-                        # =======================
-
-                    # ==============================================================================
-
+                    """
                     # 然后执行真正的剪枝
                     #print("vit_before",hidden_states_pkg['hidden_states'].shape)
-                    hidden_states_pkg['hidden_states'] = orig_kept_states
-                    
+                    hidden_states_pkg['hidden_states'] = orig_states[keep_indexs,:]
                     rotary_pos_emb_pruned = rotary_pos_emb[keep_indexs,:]
                     #print("vit_after",hidden_states_pkg['hidden_states'].shape)
                     # …… 计算新的 cu_seqlens
@@ -2429,15 +2312,10 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     # 最后记下来这些供后面拼回用
                     self._sparse_vit_saved = {
                         "orig_seq_len": orig_seq_len,
-                        "keep_indexs": keep_indexs,
-                        "removed_indices": removed_indices,
-                        "removed_states": removed_states,
-                        "orig_kept_states": orig_kept_states,
-
-                        # 新增这行，R×10 的 LongTensor
-                        "rem_to_kept_idx":    rem_to_kept_idx,  
-                        "unique_idx": unique_idx,
-                        "inv_idx": inv_idx,
+                        #"keep_indexs": keep_indexs,
+                        #"removed_indices": removed_indices,
+                        #"removed_states": removed_states,
+                        #"orig_kept_states": orig_kept_states
                     }
 
                     
@@ -2465,182 +2343,27 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     #print("seq-len",orig_seq_len,cu_seqlens)
                 
                 
-                    
         # ------------------------END------------------------------------------
             #print("layer",blk.layer_idx)
-            '''修改kv的层数'''
-            #if hasattr(self, "_sparse_vit_saved") and blk.layer_idx < 32:
-            if hasattr(self, "_sparse_vit_saved") and blk.layer_idx < DART_config['vit_pruned_layer']+7:
+            #print(hasattr(self, "_sparse_vit_saved"),)
+            if hasattr(self, "_sparse_vit_saved"):
+                #print(self._sparse_vit_saved )
                 #print(hidden_states_pkg['hidden_states'].shape, cu_seqlens_pruned, rotary_pos_emb_pruned.shape)
-                #hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens_pruned, rotary_pos_emb=rotary_pos_emb_pruned, sparse_vit_saved=sparse_vit_saved)
-                hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb, sparse_vit_saved=self._sparse_vit_saved)
-            elif hasattr(self, "_sparse_vit_saved"):
                 hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens_pruned, rotary_pos_emb=rotary_pos_emb_pruned)
             else:
                 #print(hidden_states_pkg['hidden_states'].shape, cu_seqlens, rotary_pos_emb.shape)
                 hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
-
-            # -------- 拼回被剪的 token --------
-                
-            if blk.layer_idx == 32-1 and hasattr(self, "_sparse_vit_saved"):
-                saved = self._sparse_vit_saved
-                L, D = saved["orig_seq_len"], saved["removed_states"].size(1)
-                device = hidden_states_pkg['hidden_states'].device
-                
-                # 1) 拿出新旧 kept_states 与 rem_to_kept_idx
-                new_kept        = hidden_states_pkg['hidden_states']       # [K, D]
-                orig_kept       = saved["orig_kept_states"]               # [K, D]
-                rem_to_kept_idx = saved["rem_to_kept_idx"]                # [R, 10]
-                removed_indices = saved["removed_indices"]                # [R]
-                unique_idx = saved["unique_idx"]
-                inv_idx = saved["inv_idx"]
-
-                # 2) 只对 unique_idx 计算一次 delta
-                delta_unique = (new_kept[unique_idx] - orig_kept[unique_idx])              # [U, D]
-
-                # 3) 把 inv_idx reshape 回 (R, topk)，再 gather 并均值
-                inv_idx = inv_idx.view(rem_to_kept_idx.shape)                              # [R, topk]
-                #print("delta_unique",delta_unique[inv_idx].shape)
-                avg_delta_removed = delta_unique[inv_idx].mean(dim=1)                      # [R, D]
-
-                # 4) 准备 full_states 并写回
-                full_states = torch.zeros(L, D, device=device, dtype=new_kept.dtype)
-                full_states[saved["keep_indexs"]] = new_kept                                # fill kept
-                full_states[removed_indices]    = (saved["removed_states"] + avg_delta_removed)
-
-                # 5) 替换并清理
-                hidden_states_pkg['hidden_states'] = full_states
-                del self._sparse_vit_saved
-
-                # ----------------------------------------
             
-
+            if blk.layer_idx == 32-1 and hasattr(self, "_sparse_vit_saved"):
+                del self._sparse_vit_saved
         # ----------------------------------------
-        #if frame_counts !=0:
-        #    frame_counts = frame_counts/(self.config.spatial_merge_size**2)
+        if frame_counts !=0:
+            frame_counts = frame_counts/(self.config.spatial_merge_size**2)
         
-        return self.merger(hidden_states_pkg['hidden_states']) #, frame_counts
+        return self.merger(hidden_states_pkg['hidden_states']), frame_counts
         
-    
-    def get_retained_image_token(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
-        # any_state [seq_len, num_heads, head_dim]
-        DART_config = config.DART_config
-        #K = DART_config['vit_pruned_layer']
-        image_token_start_index = 0
-        image_token_length = last_layer_state.shape[0]
 
-        pivot_image_token = DART_config['pivot_image_token']
-        pivot_text_token = DART_config['pivot_text_token']
-
-        reduction_ratio = DART_config['vit_reduction_ratio']
-        # 计算原始值
-        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
-        # 向下取4的倍数
-        TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
-        # 向上取4的倍数
-        TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
-        # 选择与原始值更接近的结果
-        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            TOKEN_TOPK = TOKEN_TOPK_down
-        else:
-            TOKEN_TOPK = TOKEN_TOPK_up
-        # 向下取
-        # TOKEN_TOPK = TOKEN_TOPK_down - 1
-        device = last_layer_state.device
-
-        device = last_layer_state.device
-
-        any_states = any_states.reshape(any_states.shape[0], -1) # [seq_len, embed_dim]
-
-        k_states_image_token = any_states[image_token_start_index:image_token_start_index + image_token_length, :] # [valid_seq_len, hidden_dim]
-        #k_states_query_token = any_states[image_token_start_index + image_token_length:, :]
-
-        k_states_image_token_L1_norm = torch.norm(k_states_image_token, p=1, dim=-1) # [valid_seq_len]
-        #k_states_query_token_L1_norm = torch.norm(k_states_query_token, p=1, dim=-1) # [valid_seq_len]
-
-        image_indices = (k_states_image_token_L1_norm.topk(pivot_image_token).indices + image_token_start_index).tolist() # pivot indices (list)
-        #query_indices = (k_states_query_token_L1_norm.topk(pivot_text_token).indices + image_token_start_index + image_token_length).tolist() # pivot indices (list)
-        #indices_set = set(image_indices + query_indices) # merge 2 lists
-        indices_set = set(image_indices)
-
-        valid_indices = set(range(image_token_start_index, image_token_start_index + image_token_length)) - set(image_indices)
-
-        valid_indices_list = list(valid_indices)
-        for item in list(indices_set):
-            valid_vectors = last_layer_state[valid_indices_list, :] # last_layer_state中待处理image token的对应向量 [valid_seq_len - num_pivot_tokens, hidden_dim]
-            cos_sim = -torch.nn.functional.cosine_similarity(last_layer_state[item, :], valid_vectors, dim=-1) # 计算余弦相似度 [valid_seq_len - num_pivot_tokens]
-            top_k_indices = cos_sim.topk(TOKEN_TOPK).indices
-
-            top_k_real_indices = [valid_indices_list[i] for i in top_k_indices] # 待保留的image token的index
-            indices_set.update(top_k_real_indices)
-
-            valid_indices.difference_update(top_k_real_indices)
-            valid_indices_list = list(valid_indices) 
-
-            retained_image_tokens_index = torch.tensor(list(indices_set), device=device)
-
-        return retained_image_tokens_index
-
-    def get_retained_image_token_random(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
-        DART_config = config.DART_config
-        reduction_ratio = DART_config['vit_reduction_ratio']
-
-        image_token_start_index = 0
-        image_token_length = last_layer_state.shape[0]
-        device = last_layer_state.device
-
-        # 计算原始值
-        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
-        # 向下取4的倍数
-        TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
-        # 向上取4的倍数
-        TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
-        # 选择与原始值更接近的结果
-        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            retained_count = TOKEN_TOPK_down
-        else:
-            retained_count = TOKEN_TOPK_up
-        # 向下取
-        # retained_count = TOKEN_TOPK_down
-        # 确保至少保留一个token
-        retained_count = max(retained_count, 1)
-        
-        # 生成所有图像token的索引并随机选择
-        all_indices = torch.arange(image_token_start_index, image_token_start_index + image_token_length, device=device)
-        retained_indices = all_indices[torch.randperm(all_indices.size(0))[:retained_count]]
-        
-        return retained_indices
-
-    def get_retained_image_token_attn_scores(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor, attn_scores: torch.Tensor) -> torch.Tensor:
-        # any_state [seq_len, num_heads, head_dim]
-        DART_config = config.DART_config
-        # K = DART_config['K']
-        image_token_start_index = 0
-        image_token_length = last_layer_state.shape[0]
-
-        reduction_ratio = DART_config['vit_reduction_ratio']
-        # 计算原始值
-        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
-        # 向下取4的倍数
-        TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
-        # 向上取4的倍数
-        TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
-        # 选择与原始值更接近的结果
-        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            TOKEN_TOPK = TOKEN_TOPK_down
-        else:
-            TOKEN_TOPK = TOKEN_TOPK_up
-        device = last_layer_state.device
-
-        #attn_scores.squeeze(0) # [nheads,seqlen,seqlen]
-        attn_scores = attn_scores.sum(dim=-2) # 沿着query维度求和
-        attn_scores = attn_scores.mean(dim=0) # 对不同的注意力头求平均
-        top_k_indices = attn_scores.topk(TOKEN_TOPK).indices
-        top_k_real_indices = top_k_indices
-        retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device)
-        return retained_image_tokens_index
-
-    def get_retained_image_token_diff(self,config,hidden_states_prev,hidden_states_cur,last_layer_state):
+    def get_retained_image_token_V2Drop(self,config,hidden_states_prev,hidden_states_cur,last_layer_state):
         DART_config = config.DART_config
         #K = DART_config['K']
         image_token_start_index = 0
@@ -2669,32 +2392,6 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device)
         return retained_image_tokens_index
 
-    def get_retained_image_token_pivot_sim(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
-        DART_config = config.DART_config
-        #K = DART_config['K']
-        image_token_start_index = 0
-        image_token_length = last_layer_state.shape[0]
-
-        reduction_ratio = DART_config['vit_reduction_ratio']
-        # 计算原始值
-        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
-        # 向下取4的倍数
-        TOKEN_TOPK_down = int(TOKEN_TOPK_RAW) // 4 * 4
-        # 向上取4的倍数
-        TOKEN_TOPK_up = (int(TOKEN_TOPK_RAW) + 3) // 4 * 4
-        # 选择与原始值更接近的结果
-        if abs(TOKEN_TOPK_RAW - TOKEN_TOPK_down) <= abs(TOKEN_TOPK_RAW - TOKEN_TOPK_up):
-            TOKEN_TOPK = TOKEN_TOPK_down
-        else:
-            TOKEN_TOPK = TOKEN_TOPK_up
-        
-        device = last_layer_state.device
-        pivot_token = last_layer_state.mean(dim=0) # 求出平均token [embed_dim]
-        cos_sim = -torch.nn.functional.cosine_similarity(pivot_token, last_layer_state, dim=-1) # 计算余弦相似度
-        top_k_indices = cos_sim.topk(TOKEN_TOPK).indices
-        top_k_real_indices = top_k_indices
-        retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device)
-        return retained_image_tokens_index
     
     def update_vision_block(self, device, dtype):
         # 获取需要替换的层索引
@@ -2761,51 +2458,6 @@ def plot_layer_states( states: np.ndarray,
     plt.close()
 
     print(f"[Saved] {save_path}")
-
-
-def plot_layer_states_cluster(
-    states: np.ndarray,
-    out_dir: str,
-    name: str,
-    cmap: str = 'rainbow',
-    labels: np.ndarray = None,   # 新增一个 labels 参数, 画每个cluster的分布
-):
-    """
-    states:     numpy array of shape (L, D)
-    out_dir:    存图的文件夹路径
-    name:       用于区分不同图的前缀/名称
-    cmap:       matplotlib 颜色映射
-    labels:     numpy array of shape (L,), 每个点的类别／颜色索引
-    """
-
-    os.makedirs(out_dir, exist_ok=True)
-
-    # 1. PCA 降到 2 维
-    pca    = PCA(n_components=2)
-    coords = pca.fit_transform(states)  # shape = (L, 2)
-
-    # 2. 准备 c
-    c = labels if labels is not None else np.arange(len(states))
-
-    # 3. 画散点图
-    plt.figure(figsize=(6, 6))
-    plt.scatter(coords[:, 0], coords[:, 1], c=c, cmap=cmap, s=8)
-    # 可选：如果要标号可以保留下面这段
-    #for i, (x, y) in enumerate(coords):
-    #    plt.text(x, y, str(i), fontsize=6, alpha=0.5)
-
-    plt.title(f"PCA of layer states ({name})")
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.tight_layout()
-
-    # 4. 保存
-    save_path = os.path.join(out_dir, f"{name}.png")
-    plt.savefig(save_path, dpi=150)
-    plt.close()
-
-    print(f"[Saved] {save_path}")
-
 
 class Qwen2RMSNorm_no_param(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):

@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ������������
-# tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "textvqa")  # ʾ�������б�
+# tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "seedbench" "vqav2" "textvqa" "vizwiz_vqa" "ocrbench")  # ʾ�������б�
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
 #export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
-tasks=("textvqa")
-pruned_layers=(2)
-reduction_ratios=(0.5)
-vit_pruned_layers=(6)
-vit_reduction_ratios=(0.5)
+tasks=("mmbench_en")
+pruned_layers=(3)
+reduction_ratios=(0.35)
+vit_pruned_layers=( 3)
+vit_reduction_ratios=(0.35)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -52,7 +52,7 @@ for task in "${tasks[@]}"; do
           vit_attn_scores_choose=False
           vit_diff_choose=True
           vit_pivot_sim_choose=False
-          GPU=6
+          GPU=0
 
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
