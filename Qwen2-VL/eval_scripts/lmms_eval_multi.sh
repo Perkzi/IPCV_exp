@@ -9,9 +9,9 @@
 
 tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "seedbench" "textvqa" "vizwiz_vqa" "ocrbench")
 pruned_layers=(3)
-reduction_ratios=(0.8 0.95)
+reduction_ratios=(0.65)
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.8)
+vit_reduction_ratios=(0.65)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -33,14 +33,14 @@ for task in "${tasks[@]}"; do
           model_id="Qwen/Qwen2-VL-7B-Instruct"
           model_name="Qwen2-VL-7B-Instruct"
           output_path="./logs/${model_name}/${task}/pruned_${pruned_layer}_ratio_${reduction_ratio}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
-          output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
+          #output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           mkdir -p "$output_path"
 
           # 对于similarity_kv， Sparse和vit_Sparse都要为True
           # 对于modeling_qwen2_vl_dart_vit_base和其它方法，在主模型prune的Sparse=True,vit_Sparse=False，在vit prune的Sparse=False,vit_Sparse=True
           # 对于vanilla (modeling_qwen2_vl_dart_vit_base)  Sparse和vit_Sparse都要为False
           Sparse=True
-          vit_Sparse=False
+          vit_Sparse=True
           image_token_start_index=0
           image_token_length=0
           max_num_trunction=128

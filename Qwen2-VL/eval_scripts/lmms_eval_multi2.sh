@@ -32,7 +32,7 @@ for task in "${tasks[@]}"; do
           model_id="Qwen/Qwen2-VL-7B-Instruct"
           model_name="Qwen2-VL-7B-Instruct"
           output_path="./logs/${model_name}/${task}/pruned_${pruned_layer}_ratio_${reduction_ratio}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
-          output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
+          #output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           mkdir -p "$output_path"
 
           Sparse=True
