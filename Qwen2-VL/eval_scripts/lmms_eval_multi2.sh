@@ -6,11 +6,11 @@
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
 #export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
-tasks=("mmbench_en")
+tasks=("seedbench" "textvqa" "vizwiz_vqa" "ocrbench")
 pruned_layers=(3)
-reduction_ratios=(0.35)
+reduction_ratios=(0.8)
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.35)
+vit_reduction_ratios=(0.8)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -36,7 +36,7 @@ for task in "${tasks[@]}"; do
           mkdir -p "$output_path"
 
           Sparse=True
-          vit_Sparse=True
+          vit_Sparse=False
           image_token_start_index=0
           image_token_length=0
           max_num_trunction=128

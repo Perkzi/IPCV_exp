@@ -3,14 +3,15 @@
 
 # ������������
 # tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "seedbench" "vqav2" "textvqa" "vizwiz_vqa" "ocrbench")  # ʾ�������б�
+#        ("mvbench")
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
-tasks=("mmbench_en")
+tasks=("gqa")
 pruned_layers=(3)
-reduction_ratios=(0.8)
+reduction_ratios=(0.65)
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.8)
+vit_reduction_ratios=(0.65)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -35,8 +36,11 @@ for task in "${tasks[@]}"; do
           output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           mkdir -p "$output_path"
 
-          Sparse=True # 如果测试modeling_qwen2_vl_dart_vit_base或者在主模型不打算prune，改为False
-          vit_Sparse=False
+          # 对于similarity_kv， Sparse和vit_Sparse都要为True
+          # 对于modeling_qwen2_vl_dart_vit_base和其它方法，在主模型prune的Sparse=True,vit_Sparse=False，在vit prune的Sparse=False,vit_Sparse=True
+          # 对于vanilla (modeling_qwen2_vl_dart_vit_base)  Sparse和vit_Sparse都要为False
+          Sparse=True
+          vit_Sparse=True
           image_token_start_index=0
           image_token_length=0
           max_num_trunction=128
@@ -52,7 +56,7 @@ for task in "${tasks[@]}"; do
           # 修改在vit上的剪枝方法
           vit_random_choose=False
           vit_attn_scores_choose=False
-          vit_diff_choose=False
+          vit_diff_choose=True
           vit_pivot_sim_choose=False
 
           GPU=1

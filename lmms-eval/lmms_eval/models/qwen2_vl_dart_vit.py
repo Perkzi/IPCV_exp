@@ -324,10 +324,13 @@ class Qwen2_VL_DART_ViT(lmms):
                 gen_kwargs["num_beams"] = 1
 
             pad_token_id = self.tokenizer.pad_token_id
-
+            
             if self.config.DART_config is not None:
                 # HACK
-                image_token_start_index = inputs.input_ids.tolist()[0].index(151655)
+                if image_inputs is not None:
+                    image_token_start_index = inputs.input_ids.tolist()[0].index(151655)
+                if video_inputs is not None:
+                    image_token_start_index = inputs.input_ids.tolist()[0].index(151656)
                 image_token_end_index = inputs.input_ids.tolist()[0].index(151653)
                 image_token_length = image_token_end_index - image_token_start_index
                 self.config.DART_config['image_token_start_index'] = image_token_start_index
