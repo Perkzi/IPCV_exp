@@ -7,11 +7,11 @@
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
-tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "seedbench" "textvqa" "vizwiz_vqa" "ocrbench")
+tasks=("mmbench_en")
 pruned_layers=(3)
-reduction_ratios=(0.65)
+reduction_ratios=(0.5)
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.65)
+vit_reduction_ratios=(0.5)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -39,7 +39,7 @@ for task in "${tasks[@]}"; do
           # 对于similarity_kv， Sparse和vit_Sparse都要为True
           # 对于modeling_qwen2_vl_dart_vit_base和其它方法，在主模型prune的Sparse=True,vit_Sparse=False，在vit prune的Sparse=False,vit_Sparse=True
           # 对于vanilla (modeling_qwen2_vl_dart_vit_base)  Sparse和vit_Sparse都要为False
-          Sparse=True
+          Sparse=False
           vit_Sparse=True
           image_token_start_index=0
           image_token_length=0
@@ -59,11 +59,11 @@ for task in "${tasks[@]}"; do
           vit_diff_choose=True
           vit_pivot_sim_choose=False
 
-          GPU=0,1,2,3
-
+          #GPU=0,1,2,3
+          GPU=1
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
-              --num_processes=4 \
+              --num_processes=1 \
               --main_process_port 50008 \
               -m lmms_eval \
               --model qwen2_vl_dart_vit \

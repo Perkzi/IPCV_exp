@@ -512,14 +512,36 @@ class Qwen2VLVisionBlock(nn.Module):
             # === 重新计算 cu_seqlens ===
             # 原始每个样本的 token 数
             frame_counts = cu_seqlens[1:] - cu_seqlens[:-1]  # [B]
-            # 假设每个样本都按相同比例减少
-            keep_per_sample = hidden_states.shape[0] // frame_counts.shape[0]
-            # 如果比例不一致，需要你在 merge 时记录每个样本保留的 token 数
-            new_frame_counts = torch.full_like(frame_counts, keep_per_sample)
+
+            # # 假设每个样本都按相同比例减少
+            # keep_per_sample = hidden_states.shape[0] // frame_counts.shape[0]
+            # # 如果比例不一致，需要你在 merge 时记录每个样本保留的 token 数
+            # new_frame_counts = torch.full_like(frame_counts, keep_per_sample)
+            # new_cu_seqlens = torch.zeros_like(cu_seqlens)
+            # new_cu_seqlens[1:] = new_frame_counts.cumsum(0)
+
+            # cu_seqlens = new_cu_seqlens  # 更新给下一层
+
+            # merged_idx 是 [B, kept_T]，但这里 batch=1 时 squeeze 了
+            # 如果 batch=1，可以先还原成一维索引
+            if merged_idx.dim() == 2 and merged_idx.size(0) == 1:
+                merged_idx_flat = merged_idx[0]
+            else:
+                merged_idx_flat = merged_idx
+
+            # 计算每个样本保留的 token 数
+            new_frame_counts = torch.zeros_like(frame_counts)
+            for b in range(frame_counts.shape[0]):
+                start = cu_seqlens[b].item()
+                end = cu_seqlens[b+1].item()
+                # 统计 merged_idx 中落在 [start, end) 的数量
+                keep_count = ((merged_idx_flat >= start) & (merged_idx_flat < end)).sum()
+                new_frame_counts[b] = keep_count
+
+            # 重新生成 cu_seqlens
             new_cu_seqlens = torch.zeros_like(cu_seqlens)
             new_cu_seqlens[1:] = new_frame_counts.cumsum(0)
-
-            cu_seqlens = new_cu_seqlens  # 更新给下一层
+            cu_seqlens = new_cu_seqlens
 
         # MLP
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
@@ -2236,7 +2258,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                     attention_mask = attention_mask[:,retained_indices]
                 else:
                     # vision数量不变
-                    video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
+                    video_embeds, _ = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
                     video_embeds.to(inputs_embeds.device)
                     video_mask = input_ids == self.config.video_token_id
                     inputs_embeds[video_mask] = video_embeds
@@ -2402,7 +2424,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         hidden_states_pkg = {'hidden_states':hidden_states, # [seq_len, embed_dim]
                             'k_states':None,                # [seq_len, num_heads, head_dim]  TODO:优化显存占用
                             'attn_scores':None}                 # [nheads,seqlen,seqlen] TODO: 优化显存占用
-        frame_counts = 0
+        frame_counts = torch.zeros(1, device=device)
     
         target_keep_ratio = 1.0 - self.config.DART_config['vit_reduction_ratio']  # 0.2
         current_keep_ratio = 1.0  # 初始保留 100%
@@ -2461,8 +2483,8 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
             
         
         # ----------------------------------------
-        if frame_counts !=0:
-            frame_counts = frame_counts/(self.config.spatial_merge_size**2)
+        #if frame_counts !=0:
+        frame_counts = frame_counts/(self.config.spatial_merge_size**2)
         
         return self.merger(hidden_states_pkg['hidden_states']), frame_counts
         
@@ -2730,43 +2752,51 @@ class Qwen2RMSNorm_no_param(nn.Module):
     def extra_repr(self):
         return f"eps={self.variance_epsilon}"
 
+
 def _update_ids(input_ids, image_token_id, retained_nums):
-    # 确保batch_size=1
+    # 确保 batch_size=1
     assert input_ids.size(0) == 1, "Batch size must be 1"
     
-    seq = input_ids[0]  # 获取序列 [seq_len]
-    new_tokens = []     # 存储新序列的token
-    indices = []        # 存储新序列对应的原始索引
-    img_segment_idx = 0 # 当前处理的图像段索引
-    retained_nums = torch.tensor(retained_nums, dtype = torch.int32, device = input_ids.device)
-    
+    seq = input_ids[0]  # [seq_len]
+    new_tokens = []
+    indices = []
+
+    # retained_nums 直接求和成一个总数
+    total_retain = int(
+        torch.tensor(retained_nums, device=input_ids.device).sum().item()
+    )
+
     i = 0
     while i < len(seq):
         if seq[i] != image_token_id:
-            # 非图像标记：直接保留
+            # 非图像标记直接保留
             new_tokens.append(seq[i].item())
             indices.append(i)
             i += 1
         else:
-            # 发现图像标记段：计算连续图像标记的长度
+            # 找到连续的 image_token 段
             start_idx = i
             while i < len(seq) and seq[i] == image_token_id:
                 i += 1
             segment_len = i - start_idx
-            
-            # 获取该段需要保留的数量
-            retain_num = retained_nums[img_segment_idx] if img_segment_idx < len(retained_nums) else segment_len
-            retain_num = min(retain_num, segment_len)  # 确保不超过实际长度
-            
-            # 保留前retain_num个图像标记
-            for j in range(retain_num):
-                new_tokens.append(image_token_id)
-                indices.append(start_idx + j)
-            
-            img_segment_idx += 1
-    
-    # 转换为张量
-    new_input_ids = torch.tensor([new_tokens], dtype=torch.long)  # [1, new_seq_len]
-    indices = torch.tensor(indices, dtype=torch.long)             # [new_seq_len]
-    
+
+            # 如果还有 quota，就保留这一段的一部分
+            retain_num = min(total_retain, segment_len)
+            if retain_num > 0:
+                new_tokens.extend(seq[start_idx:start_idx + retain_num].tolist())
+                indices.extend(range(start_idx, start_idx + retain_num))
+                total_retain -= retain_num
+
+            # quota 用完后，后面的 image_token 段就全跳过
+            if total_retain <= 0:
+                # 跳过剩余的 image_token 段
+                while i < len(seq):
+                    if seq[i] != image_token_id:
+                        new_tokens.append(seq[i].item())
+                        indices.append(i)
+                    i += 1
+                break
+
+    new_input_ids = torch.tensor([new_tokens], dtype=torch.long, device=input_ids.device)
+    indices = torch.tensor(indices, dtype=torch.long, device=input_ids.device)
     return new_input_ids, indices
