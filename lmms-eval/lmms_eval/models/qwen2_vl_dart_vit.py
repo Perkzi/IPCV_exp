@@ -9,11 +9,11 @@ from accelerate import Accelerator, DistributedType
 from loguru import logger as eval_logger
 from PIL import Image
 from tqdm import tqdm
-# from transformers import AutoProcessor, AutoTokenizer, Qwen2VLForConditionalGeneration
+from transformers import AutoProcessor, AutoTokenizer, Qwen2VLForConditionalGeneration
 from transformers import AutoProcessor, AutoTokenizer
 import sys
-sys.path.append('../../../Qwen2-VL/')
-from Qwen2VL_DART_ViT import Qwen2VLForConditionalGeneration
+# sys.path.append('../../../Qwen2-VL/')
+# from Qwen2VL_DART_ViT import Qwen2VLForConditionalGeneration
 
 from lmms_eval import utils
 from lmms_eval.api.instance import Instance
@@ -348,6 +348,7 @@ class Qwen2_VL_DART_ViT(lmms):
 
             generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
             answers = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            print(f"answers: {answers}")
             for i, ans in enumerate(answers):
                 for term in until:
                     if len(term) > 0:

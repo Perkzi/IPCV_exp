@@ -28,7 +28,7 @@ for task in "${tasks[@]}"; do
           echo "Vit Reduction Ratio: $vit_reduction_ratio"
           echo "========================================"
 
-          model_id="/obs/pretrained_models/Qwen/Qwen2-VL-7B-Instruct"
+          model_id="Qwen/Qwen2-VL-7B-Instruct"
           model_id="Qwen/Qwen2-VL-7B-Instruct"
           model_name="Qwen2-VL-7B-Instruct"
           output_path="./logs/${model_name}/${task}/pruned_${pruned_layer}_ratio_${reduction_ratio}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
@@ -59,7 +59,7 @@ for task in "${tasks[@]}"; do
 
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
-              --num_processes=1 \
+              --num_processes=4 \
               --main_process_port 50008 \
               -m lmms_eval \
               --model qwen2_vl_dart_vit \
