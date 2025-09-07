@@ -28,7 +28,7 @@ for task in "${tasks[@]}"; do
           echo "Vit Reduction Ratio: $vit_reduction_ratio"
           echo "========================================"
 
-          model_id="/obs/pretrained_models/Qwen/Qwen2-VL-7B-Instruct"
+          #model_id="/obs/pretrained_models/Qwen/Qwen2-VL-7B-Instruct"
           model_id="Qwen/Qwen2-VL-7B-Instruct"
           model_name="Qwen2-VL-7B-Instruct"
           output_path="./logs/${model_name}/${task}/pruned_${pruned_layer}_ratio_${reduction_ratio}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"

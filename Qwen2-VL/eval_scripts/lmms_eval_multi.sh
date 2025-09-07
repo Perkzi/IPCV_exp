@@ -29,7 +29,7 @@ for task in "${tasks[@]}"; do
           echo "Vit Reduction Ratio: $vit_reduction_ratio"
           echo "========================================"
 
-          model_id="Qwen/Qwen2-VL-7B-Instruct"
+          #model_id="Qwen/Qwen2-VL-7B-Instruct"
           model_id="Qwen/Qwen2-VL-7B-Instruct"
           model_name="Qwen2-VL-7B-Instruct"
           output_path="./logs/${model_name}/${task}/pruned_${pruned_layer}_ratio_${reduction_ratio}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
@@ -40,7 +40,7 @@ for task in "${tasks[@]}"; do
           # 对于modeling_qwen2_vl_dart_vit_base和其它方法，在主模型prune的Sparse=True,vit_Sparse=False，在vit prune的Sparse=False,vit_Sparse=True
           # 对于vanilla (modeling_qwen2_vl_dart_vit_base)  Sparse和vit_Sparse都要为False
           Sparse=True
-          vit_Sparse=True
+          vit_Sparse=False
           image_token_start_index=0
           image_token_length=0
           max_num_trunction=128
