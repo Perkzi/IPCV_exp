@@ -4,15 +4,14 @@
 # ������������
 # tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "seedbench" "vqav2" "textvqa" "vizwiz_vqa" "ocrbench")  # ʾ�������б�
 #        ("mvbench")
-#        ("mvbench")
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
-tasks=("gqa")
+tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "seedbench" "textvqa" "vizwiz_vqa" "ocrbench")
 pruned_layers=(3)
-reduction_ratios=(0.65)
+reduction_ratios=(0.8 0.95)
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.65)
+vit_reduction_ratios=(0.8)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -30,17 +29,13 @@ for task in "${tasks[@]}"; do
           echo "Vit Reduction Ratio: $vit_reduction_ratio"
           echo "========================================"
 
-          #model_id="Qwen/Qwen2-VL-7B-Instruct"
+          # model_id="/obs/pretrained_models/Qwen/Qwen2-VL-7B-Instruct"
           model_id="Qwen/Qwen2-VL-7B-Instruct"
           model_name="Qwen2-VL-7B-Instruct"
           output_path="./logs/${model_name}/${task}/pruned_${pruned_layer}_ratio_${reduction_ratio}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           mkdir -p "$output_path"
 
-          # 对于similarity_kv， Sparse和vit_Sparse都要为True
-          # 对于modeling_qwen2_vl_dart_vit_base和其它方法，在主模型prune的Sparse=True,vit_Sparse=False，在vit prune的Sparse=False,vit_Sparse=True
-          # 对于vanilla (modeling_qwen2_vl_dart_vit_base)  Sparse和vit_Sparse都要为False
-          Sparse=True
           # 对于similarity_kv， Sparse和vit_Sparse都要为True
           # 对于modeling_qwen2_vl_dart_vit_base和其它方法，在主模型prune的Sparse=True,vit_Sparse=False，在vit prune的Sparse=False,vit_Sparse=True
           # 对于vanilla (modeling_qwen2_vl_dart_vit_base)  Sparse和vit_Sparse都要为False
@@ -62,14 +57,13 @@ for task in "${tasks[@]}"; do
           vit_random_choose=False
           vit_attn_scores_choose=False
           vit_diff_choose=True
-          vit_diff_choose=True
           vit_pivot_sim_choose=False
 
-          GPU=1
+          GPU=0,1,2,3
 
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
-              --num_processes=1 \
+              --num_processes=4 \
               --main_process_port 50008 \
               -m lmms_eval \
               --model qwen2_vl_dart_vit \
