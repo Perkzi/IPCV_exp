@@ -5,7 +5,7 @@ from .modeling_qwen2_vl_dart_vit_base import Qwen2VLForConditionalGeneration
 #from .modeling_qwen2_vl_dart_vit_mean_shift_cluster import Qwen2VLForConditionalGeneration
 #from .modeling_qwen2_vl_dart_vit_mean_shift_fix import Qwen2VLForConditionalGeneration
 #from .modeling_qwen2_vl_dart_vit_mean_shift_similarity import Qwen2VLForConditionalGeneration
-#from .modeling_qwen2_vl_dart_vit_mean_shift_similarity_kv import Qwen2VLForConditionalGeneration
+# from .modeling_qwen2_vl_dart_vit_mean_shift_similarity_kv import Qwen2VLForConditionalGeneration
 #from .modeling_qwen2_vl_dart_vit_mean_shift_cluster_kv import Qwen2VLForConditionalGeneration
 #from .modeling_qwen2_vl_dart_vit import Qwen2VLForConditionalGeneration
 
@@ -13,9 +13,7 @@ from .modeling_qwen2_vl_dart_vit_base import Qwen2VLForConditionalGeneration
 
 #from .modeling_qwen2_vl_V2Drop import Qwen2VLForConditionalGeneration
 
-#from .modeling_qwen2_vl_Token_fusion import Qwen2VLForConditionalGeneration
-
-#from .modeling_qwen2_vl_FastV import Qwen2VLForConditionalGeneration
+from .modeling_qwen2_vl_FastV import Qwen2VLForConditionalGeneration
 
 from .configuration_qwen2_vl_dart_vit import Qwen2VLConfig,Qwen2VLVisionConfig
 #from .image_processor_qwen2_vl_dart_vit import load_pretrained_model
