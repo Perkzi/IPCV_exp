@@ -304,9 +304,9 @@ class VisionAttention(nn.Module):
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
-        #print("CUDA memory allocated before attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
+        print("CUDA memory allocated before attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
         attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(self.head_dim)
-        #print("CUDA memory allocated after attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
+        print("CUDA memory allocated after attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
         attn_weights = attn_weights + attention_mask
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
         attn_output = torch.matmul(attn_weights, v)
@@ -586,19 +586,14 @@ class Qwen2VLAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        #print("CUDA memory allocated before attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
-        #print("query_states",query_states.shape)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-        #print("CUDA memory allocated after attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
-        
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
 
         # upcast attention to fp32
-        #attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float16).to(query_states.dtype)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
 
@@ -787,8 +782,6 @@ class Qwen2VLSdpaAttention(Qwen2VLAttention):
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        #print("output_attn",output_attentions)
-
         if output_attentions:
             # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
             logger.warning_once(
@@ -885,9 +878,6 @@ class Qwen2VLDecoderLayer(nn.Module):
                 f"Sliding Window Attention is enabled but not implemented for `{config._attn_implementation}`; "
                 "unexpected results may be encountered."
             )
-
-        #print("attnimp",self.attn_implementation)
-        self.attn_implementation = 'sdpa'
         self.self_attn = QWEN2_VL_ATTENTION_CLASSES[self.attn_implementation](config, layer_idx)
 
         self.mlp = Qwen2MLP(config)
@@ -1398,15 +1388,14 @@ class DART(Qwen2VLModel):
         dtype = hidden_states.dtype
 
         # 只触发一次
-        # if self.config.DART_config is not None and self.config.DART_config['Sparse'] \
-        #     and not self.update_attention_layer:
-        #     self.update_layer(device,dtype)
-        #     self.update_attention_layer=True
+        if self.config.DART_config is not None and self.config.DART_config['Sparse'] \
+            and not self.update_attention_layer:
+            self.update_layer(device,dtype)
+            self.update_attention_layer=True
 
         assert batch_size == 1, "batch_size > 1 requires changes to some implementation"
 
         for i, decoder_layer in enumerate(self.layers):
-            
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
             #print(self.gradient_checkpointing) # false
@@ -1433,10 +1422,8 @@ class DART(Qwen2VLModel):
                     image_token_length = DART_config['image_token_length']
                     #print("image_token_length",image_token_length)
                     
-                    #if K-1>0 and decoder_layer.self_attn.layer_idx ==K-1 and DART_config['diff_choose'] and layer_outputs['hidden_states'].shape[1]>1:
+                    # if K-1>0 and decoder_layer.self_attn.layer_idx ==K-1 and DART_config['diff_choose'] and layer_outputs['hidden_states'].shape[1]>1:
                     #     hidden_states_prev = layer_outputs['hidden_states'][0] # K-1层的输入
-                    if K-1>0 and decoder_layer.self_attn.layer_idx ==K-1 and layer_outputs['hidden_states'].shape[1]>1:
-                        output_attentions = True
 
                     if decoder_layer.self_attn.layer_idx == K and seq_length > 1:
                         device = hidden_states.device
@@ -1511,9 +1498,7 @@ class DART(Qwen2VLModel):
                     use_cache=use_cache,
                     cache_position=cache_position,
                 )
-                
                 #print("layer_output",layer_outputs['hidden_states'].shape)
-            output_attentions = False
             #print("layer_o",layer_outputs.keys())
             #hidden_states = layer_outputs[0]
             hidden_states = layer_outputs['hidden_states']

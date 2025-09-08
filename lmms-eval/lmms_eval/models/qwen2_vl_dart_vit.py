@@ -76,6 +76,8 @@ class Qwen2_VL_DART_ViT(lmms):
         vit_attn_scores_choose=False,
         vit_diff_choose = False,
         vit_pivot_sim_choose = False,
+
+        torch_dtype="auto",
         **kwargs,
     ) -> None:
         super().__init__()
@@ -94,14 +96,21 @@ class Qwen2_VL_DART_ViT(lmms):
             self.device_map = f"cuda:{accelerator.local_process_index}"
 
         if use_flash_attention_2:
+            # self._model = Qwen2VLForConditionalGeneration.from_pretrained(
+            #     pretrained,
+            #     torch_dtype="auto",
+            #     device_map=self.device_map,
+            #     attn_implementation="flash_attention_2",
+            # ).eval()
             self._model = Qwen2VLForConditionalGeneration.from_pretrained(
                 pretrained,
-                torch_dtype="auto",
+                torch_dtype=torch_dtype,
                 device_map=self.device_map,
                 attn_implementation="flash_attention_2",
             ).eval()
         else:
-            self._model = Qwen2VLForConditionalGeneration.from_pretrained(pretrained, torch_dtype="auto", device_map=self.device_map).eval()
+            # self._model = Qwen2VLForConditionalGeneration.from_pretrained(pretrained, torch_dtype="auto", device_map=self.device_map).eval()
+            self._model = Qwen2VLForConditionalGeneration.from_pretrained(pretrained, torch_dtype=torch_dtype, device_map=self.device_map).eval()
 
         self.processor = AutoProcessor.from_pretrained(pretrained, max_pixels=max_pixels, min_pixels=min_pixels)
         self.max_pixels = max_pixels
