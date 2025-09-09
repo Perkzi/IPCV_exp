@@ -13,7 +13,9 @@
 
 #from .modeling_qwen2_vl_V2Drop import Qwen2VLForConditionalGeneration
 
-from .modeling_qwen2_vl_FastV import Qwen2VLForConditionalGeneration
+#from .modeling_qwen2_vl_FastV import Qwen2VLForConditionalGeneration
+
+from .modeling_qwen2_vl_SparseVLM import Qwen2VLForConditionalGeneration
 
 #from .modeling_qwen2_vl_Token_fusion import Qwen2VLForConditionalGeneration
 

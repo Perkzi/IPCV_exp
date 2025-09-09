@@ -7,7 +7,7 @@
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
-tasks=("textvqa")
+tasks=("gqa" )
 pruned_layers=(3)
 reduction_ratios=(0.8)
 vit_pruned_layers=( 3)

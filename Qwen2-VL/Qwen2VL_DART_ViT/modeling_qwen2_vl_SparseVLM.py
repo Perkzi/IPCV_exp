@@ -304,11 +304,12 @@ class VisionAttention(nn.Module):
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
-        print("CUDA memory allocated before attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
+        #print("CUDA memory allocated before attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
         attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(self.head_dim)
-        print("CUDA memory allocated after attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
+        #print("CUDA memory allocated after attention calculation:", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
         attn_weights = attn_weights + attention_mask
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+        #attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float16).to(q.dtype)
         attn_output = torch.matmul(attn_weights, v)
         attn_output = attn_output.transpose(0, 1)
         attn_output = attn_output.reshape(seq_length, -1)
@@ -1388,13 +1389,23 @@ class DART(Qwen2VLModel):
         device = hidden_states.device
         dtype = hidden_states.dtype
 
+        
+        target_layer_indices = {3,7,16}
+        prev_target_layers = {2, 6, 15}
+
         # 只触发一次
         if self.config.DART_config is not None and self.config.DART_config['Sparse'] \
             and not self.update_attention_layer:
-            self.update_layer(device,dtype)
+            self.update_layer(device,dtype,prev_target_layers=prev_target_layers)
             self.update_attention_layer=True
 
         assert batch_size == 1, "batch_size > 1 requires changes to some implementation"
+
+        
+
+        DART_config = self.config.DART_config
+        image_token_start_index = DART_config['image_token_start_index']
+        image_token_length = DART_config['image_token_length']
 
         for i, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
@@ -1416,18 +1427,19 @@ class DART(Qwen2VLModel):
                 # {'Sparse': True, 'K': 2, 'image_token_start_index': 15,
                 #  'image_token_length': 1316, 'max_num_trunction': 128,
                 #  'reduction_ratio': 0.778, 'pivot_image_token': 4, 'pivot_text_token': 4}
-                DART_config = self.config.DART_config
                 if DART_config is not None and DART_config['Sparse']:
-                    K = DART_config['pruned_layer']  # pruned layer
-                    image_token_start_index = DART_config['image_token_start_index']
-                    image_token_length = DART_config['image_token_length']
+                    # K = DART_config['pruned_layer']  # pruned layer
+                    # image_token_start_index = DART_config['image_token_start_index']
+                    # image_token_length = DART_config['image_token_length']
                     #print("image_token_length",image_token_length)
                     
                     # if K-1>0 and decoder_layer.self_attn.layer_idx ==K-1 and DART_config['diff_choose'] and layer_outputs['hidden_states'].shape[1]>1:
                     #     hidden_states_prev = layer_outputs['hidden_states'][0] # K-1层的输入
 
-                    if decoder_layer.self_attn.layer_idx == K and seq_length > 1:
+                    #if decoder_layer.self_attn.layer_idx == K and seq_length > 1:
+                    if decoder_layer.self_attn.layer_idx in target_layer_indices and seq_length > 1:
                         device = hidden_states.device
+                        seq_length = layer_outputs['hidden_states'].shape[1]
 
                         #last_layer_state = layer_outputs[0]  # 上一层的输出
                         last_layer_state = layer_outputs['hidden_states'].detach().clone()
@@ -1444,8 +1456,14 @@ class DART(Qwen2VLModel):
 
                         
                         attn_scores = layer_outputs['attn_scores']
-                        retained_image_tokens_index = self.get_retained_image_token_attn_scores(
-                            self.config, last_layer_state, k_states,attn_scores).to(device)
+                        retained_image_tokens_index, vision_states = self.get_retained_image_token_sparseVLM(
+                            self.config, last_layer_state, k_states,attn_scores,image_token_length)
+                        
+                        retained_image_tokens_index = retained_image_tokens_index.to(device)
+                        vision_states = vision_states.to(device)
+
+                        #print("retain",retained_image_tokens_index.shape, vision_states.shape)
+                        
                         del layer_outputs['attn_scores']
                         del attn_scores
                         torch.cuda.synchronize()
@@ -1474,7 +1492,13 @@ class DART(Qwen2VLModel):
                         # sort index
                         keep_indexs = keep_indexs.sort().values
 
+                        image_token_length = retained_image_tokens_index.shape[0]
+
+                        #print("hid0",hidden_states.shape)
                         hidden_states = hidden_states[:,keep_indexs,:]
+                        #print("hid1",hidden_states.shape)
+                        hidden_states[:,image_token_start_index:image_token_start_index+(retained_image_tokens_index.shape[0]),:] = vision_states
+                        #print("hid2",hidden_states.shape)
                         #print("1",hidden_states.shape,cache_position.shape)#torch.Size([1, 354, 3584]) torch.Size([1378])
                         # if causal_mask is not None:
                         #     causal_mask = causal_mask[:,:,:hidden_states.shape[1],:hidden_states.shape[1]]
@@ -1488,6 +1512,7 @@ class DART(Qwen2VLModel):
                         #print("po",position_ids.shape,keep_indexs.shape)#torch.Size([3, 1, 1378]) torch.Size([354])
                         position_ids = position_ids[:, :, keep_indexs]
                         #print(causal_mask,position_ids.shape)None torch.Size([3, 1, 354])
+                        #print("pos",position_ids.shape)
 
                 layer_outputs = decoder_layer(
                     hidden_states,
@@ -1527,14 +1552,23 @@ class DART(Qwen2VLModel):
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
- 
-    def get_retained_image_token_attn_scores(self, config: Qwen2VLConfig,
-                                         last_layer_state: torch.Tensor,
-                                         any_states: torch.Tensor,
-                                         attn_scores: torch.Tensor) -> torch.Tensor:
+    
+    def get_retained_image_token_sparseVLM(self, 
+                                       config: Qwen2VLConfig,
+                                       last_layer_state: torch.Tensor,
+                                       any_states: torch.Tensor,
+                                       attn_scores: torch.Tensor,
+                                       image_token_length
+                                       
+                                       ) -> torch.Tensor:
+        """
+        按 SparseVLM 的 attn_postprocess_topk 方法实现的图像 token 剪枝
+        返回：保留的 image token 在当前序列中的绝对索引（升序）
+
+        
+        """
         DART_config = config.DART_config
         image_token_start_index = DART_config['image_token_start_index']
-        image_token_length = DART_config['image_token_length']
         reduction_ratio = DART_config['reduction_ratio']
         TOKEN_TOPK = int(image_token_length * (1 - reduction_ratio))
 
@@ -1546,27 +1580,85 @@ class DART(Qwen2VLModel):
         # 对不同 head 求平均
         attn_scores = attn_scores.mean(dim=0)  # [seqlen, seqlen]
 
-        # 只取最后一个 query token 对所有 key token 的注意力
-        last_tok_attn = attn_scores[-1]  # [seqlen]
+        # === SparseVLM 的关键逻辑 ===
+        # 文本 token 的起始位置
+        text_token_start_index = image_token_start_index + image_token_length
+        text_token_num = seq_length - text_token_start_index
 
-        # 取出 image token 部分
-        img_scores = last_tok_attn[image_token_start_index:image_token_start_index + image_token_length]
+        # 文本 token 的索引（这里直接取所有文本 token）
+        text_token_indices = torch.arange(text_token_start_index, seq_length, device=device)
 
-        # 选出 top-k image token（相对 image token 段的索引）
-        top_k_indices = img_scores.topk(TOKEN_TOPK).indices
+        # 取出 文本 token → 图像 token 的注意力分数
+        # attn_scores[Q, K]，Q 是文本 token，K 是图像 token
+        relation_vis_text = attn_scores[text_token_indices, 
+                                        image_token_start_index:image_token_start_index + image_token_length]
+        # 在所有文本 token 上取平均，得到每个图像 token 的重要性分数
+        relation_vis = relation_vis_text.mean(dim=0)  # [image_token_length]
+
+        # Top-K 选择（SparseVLM 是 min(num_keep, v_token_num - 1)）
+        num_keep = min(TOKEN_TOPK, image_token_length - 1)
+        top_k_indices = torch.topk(relation_vis, num_keep, dim=0).indices
         top_k_real_indices = top_k_indices + image_token_start_index
 
-        # 保留：image token 前的所有 token + top-k image token + image token 后的所有 token
-        # keep_indices = torch.cat((
-        #     torch.arange(image_token_start_index, device=device),
-        #     top_k_real_indices,
-        #     torch.arange(image_token_start_index + image_token_length, seq_length, device=device)
-        # ))
+        # 升序排序
+        keep_indices = torch.sort(top_k_real_indices).values
 
-        # 排序
-        keep_indices = torch.tensor(top_k_real_indices, device=device).sort().values
 
-        return keep_indices
+
+
+        # === 回收池逻辑 ===
+        all_img_indices = torch.arange(image_token_start_index,
+                                    image_token_start_index + image_token_length,
+                                    device=device)
+        drop_indices = torch.tensor([i for i in all_img_indices.tolist()
+                                    if i not in keep_indices.tolist()],
+                                    device=device)
+
+
+
+        merged_hidden_states = None
+        if len(drop_indices) > 0:
+            # 1. 计算被丢弃 token 的重要性分数
+            drop_scores = relation_vis[drop_indices - image_token_start_index]
+            num_recycle = max(1, int(len(drop_indices) * 0.3))
+            recycle_rel_idx = torch.topk(drop_scores, num_recycle).indices
+            recycle_indices = drop_indices[recycle_rel_idx]
+
+            # 2. 取出这些回收 token 的特征
+            recycle_tokens = last_layer_state[:, recycle_indices, :]  # [B, M, C]
+
+            # 3. 聚类合并（用聚类中心 index 作为位置）
+            cluster_num = max(1, recycle_tokens.shape[1] // 10 + 1)
+            merged_recycle_tokens, center_indices = cluster_and_merge_with_center_index(
+                recycle_tokens, cluster_num,
+                orig_indices=recycle_indices.unsqueeze(0).expand(last_layer_state.size(0), -1)
+            )
+
+            # 4. 更新 keep_indices（保留原 Top-K + 聚类中心）
+            keep_indices = torch.sort(torch.cat([keep_indices, center_indices[0]])).values
+
+            # 5. 构造 merged_hidden_states（替换中心位置）
+            kept_tokens = last_layer_state[:, keep_indices, :].clone()
+
+            # 找到每个中心在 keep_indices 中的位置
+            for b in range(kept_tokens.size(0)):
+                for ci, center_idx in enumerate(center_indices[b]):
+                    pos_in_keep = (keep_indices == center_idx).nonzero(as_tuple=False)[0, 0]
+                    kept_tokens[b, pos_in_keep, :] = merged_recycle_tokens[b, ci, :]
+
+            merged_hidden_states = kept_tokens  # 已经包含视觉 + 文本 token（顺序正确）
+
+        else:
+            # 没有回收池，直接取保留 token（包含视觉 + 文本）
+            merged_hidden_states = last_layer_state[:, keep_indices, :]
+
+
+
+        return keep_indices, merged_hidden_states
+    
+   
+
+    
 
     # def get_retained_image_token_attn_scores(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor, attn_scores: torch.Tensor) -> torch.Tensor:
     #     # any_state [seq_len, num_heads, head_dim]
@@ -1593,73 +1685,182 @@ class DART(Qwen2VLModel):
     #     #print(retained_image_tokens_index.shape)
     #     return retained_image_tokens_index
 
-    # def get_retained_image_token_diff(self,config,hidden_states_prev,hidden_states_cur,last_layer_state):
-    #     DART_config = config.DART_config
-    #     #K = DART_config['K']
-    #     image_token_start_index = DART_config['image_token_start_index']
-    #     image_token_length = DART_config['image_token_length']
 
-    #     reduction_ratio = DART_config['reduction_ratio']
-    #     # 计算原始值
-    #     TOKEN_TOPK = int(image_token_length * (1 - reduction_ratio))
-
-    #     # # 向下取
-    #     # TOKEN_TOPK = TOKEN_TOPK_down - 1
-    #     device = last_layer_state.device
-
-    #     diff = hidden_states_cur - hidden_states_prev # [seqlen,embed_dim]
-    #     diff_norm = torch.norm(diff,dim=-1) # [seqlen]
-    #     img_norm = diff_norm[image_token_start_index:image_token_start_index+image_token_length]
-    #     top_k_indices = img_norm.topk(TOKEN_TOPK).indices
-    #     top_k_real_indices = top_k_indices + image_token_start_index
-    #     retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device) 
-    #     return retained_image_tokens_index
-
-    # def get_retained_image_token_pivot_sim(self, config: Qwen2VLConfig, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
-    #     DART_config = config.DART_config
-    #     #K = DART_config['K']
-    #     image_token_start_index = DART_config['image_token_start_index']
-    #     image_token_length = DART_config['image_token_length']
-
-    #     reduction_ratio = DART_config['reduction_ratio']
-    #     # 计算原始值
-    #     TOKEN_TOPK = int(image_token_length * (1 - reduction_ratio))
-        
-        
-    #     device = last_layer_state.device
-    #     img_state = last_layer_state[0][image_token_start_index:image_token_start_index+image_token_length]
-    #     pivot_token = img_state.mean(dim=0) # 求出平均token [embed_dim]
-    #     cos_sim = -torch.nn.functional.cosine_similarity(pivot_token, img_state, dim=-1) # 计算余弦相似度
-    #     top_k_indices = cos_sim.topk(TOKEN_TOPK).indices
-    #     top_k_real_indices = top_k_indices + image_token_start_index 
-    #     retained_image_tokens_index = torch.tensor(top_k_real_indices, device=device) 
-    #     return retained_image_tokens_index
-
-    def update_layer(self, device=None, dtype=None):
+    def update_layer(self, device=None, dtype=None, prev_target_layers=[]):
         # 获取需要替换的层索引
-        k = self.config.DART_config['pruned_layer'] - 1
-        if k<0 : return 
-        # 旧 block
-        old_block = self.layers[k]
-        # 创建新 block，使用 'eager' 注意力实现
-        new_block = Qwen2VLDecoderLayer(
-            self.config,
-            layer_idx=k,
-            attn_implementation='eager'
-        )
-        if device is not None and dtype is not None:
-            new_block = new_block.to(device=device, dtype=dtype)
-        # 尝试复制参数（尽可能匹配）
-        missing_keys, unexpected_keys = new_block.load_state_dict(
-            old_block.state_dict(),
-            strict=False  # 允许注意力实现不同导致的权重不匹配
-        )
-        #print(f"Missing keys: {missing_keys}")       # 应该只包含与注意力实现相关的键
-        #print(f"Unexpected keys: {unexpected_keys}") # 应该为空或只包含预期的键
-        # 替换 block
-        self.layers[k] = new_block
+        #k = self.config.DART_config['pruned_layer'] - 1
+        #if k<0 : return 
+        for k in prev_target_layers:
+            # 旧 block
+            old_block = self.layers[k]
+            # 创建新 block，使用 'eager' 注意力实现
+            new_block = Qwen2VLDecoderLayer(
+                self.config,
+                layer_idx=k,
+                attn_implementation='eager'
+            )
+            if device is not None and dtype is not None:
+                new_block = new_block.to(device=device, dtype=dtype)
+            # 尝试复制参数（尽可能匹配）
+            missing_keys, unexpected_keys = new_block.load_state_dict(
+                old_block.state_dict(),
+                strict=False  # 允许注意力实现不同导致的权重不匹配
+            )
+            #print(f"Missing keys: {missing_keys}")       # 应该只包含与注意力实现相关的键
+            #print(f"Unexpected keys: {unexpected_keys}") # 应该为空或只包含预期的键
+            # 替换 block
+            self.layers[k] = new_block
         return 
     
+ 
+import einops as ein
+
+def cluster_and_merge_with_center_index(x, cluster_num, orig_indices):
+    """
+    x: [B, N, C] token 特征
+    cluster_num: 聚类中心数
+    orig_indices: [B, N] 每个 token 的原始绝对位置索引（RoPE 用）
+    返回:
+        x_merged: [B, cluster_num, C] 合并后的特征
+        center_indices: [B, cluster_num] 每个合并 token 对应的原始位置索引（聚类中心）
+    """
+    B, N, C = x.shape
+
+    # 计算距离矩阵
+    x1 = ein.rearrange(x, "b l r -> b l () r")
+    x2 = ein.rearrange(x, "b l r -> b () l r")
+    distance = (x1 - x2).norm(dim=-1, p=2)
+    dist_matrix = distance / (C ** 0.5)
+
+    # 密度
+    dist_nearest, _ = torch.topk(dist_matrix, k=cluster_num, dim=-1, largest=False)
+    density = (-(dist_nearest ** 2).mean(dim=-1)).exp()
+    density = density + torch.rand_like(density) * 1e-6
+
+    # 选中心（index_down 是相对于输入 x 的下标）
+    mask = (density[:, None, :] > density[:, :, None]).type_as(x)
+    dist_max = dist_matrix.flatten(1).max(dim=-1)[0][:, None, None]
+    dist, _ = (dist_matrix * mask + dist_max * (1 - mask)).min(dim=-1)
+    score = dist * density
+    _, index_down = torch.topk(score, k=cluster_num, dim=-1)  # [B, cluster_num]
+
+    # 分配 token 到最近中心
+    dist_matrix = index_points(dist_matrix, index_down)
+    idx_cluster = dist_matrix.argmin(dim=1)
+
+    # 确保中心归到自己
+    idx_batch = torch.arange(B, device=x.device)[:, None].expand(B, cluster_num)
+    idx_tmp = torch.arange(cluster_num, device=x.device)[None, :].expand(B, cluster_num)
+    idx_cluster[idx_batch.reshape(-1), index_down.reshape(-1)] = idx_tmp.reshape(-1)
+
+    # 合并特征
+    token_weight = x.new_ones(B, N, 1)
+    idx_batch = torch.arange(B, device=x.device)[:, None]
+    idx = idx_cluster + idx_batch * cluster_num
+
+    all_weight = token_weight.new_zeros(B * cluster_num, 1)
+    all_weight.index_add_(0, idx.reshape(B * N), token_weight.reshape(B * N, 1))
+    all_weight = all_weight + 1e-6
+    norm_weight = token_weight / all_weight[idx]
+
+    x_merged = x.new_zeros(B * cluster_num, C)
+    source = x * norm_weight
+    x_merged.index_add_(0, idx.reshape(B * N), source.reshape(B * N, C).type_as(x))
+    x_merged = x_merged.reshape(B, cluster_num, C)
+
+    # === 新增：直接用聚类中心的原始位置索引 ===
+    center_indices = torch.gather(orig_indices, 1, index_down)
+
+    return x_merged, center_indices
+
+
+
+# def cluster_and_merge0(x, cluster_num):
+    
+#     B, N, C = x.shape
+
+#     x1 = ein.rearrange(x, "b l r -> b l () r")
+#     x2 = ein.rearrange(x, "b l r -> b () l r")
+#     distance = (x1 - x2).norm(dim=-1, p=2)
+#     dist_matrix = distance / (C ** 0.5)        
+#     # get local density
+#     dist_nearest, index_nearest = torch.topk(dist_matrix, k=cluster_num, dim=-1, largest=False)
+#     density = (-(dist_nearest ** 2).mean(dim=-1)).exp()
+#     # add a little noise to ensure no tokens have the same density.
+#     density = density + torch.rand(
+#         density.shape, device=density.device, dtype=density.dtype) * 1e-6
+
+#     # get distance indicator
+#     mask = density[:, None, :] > density[:, :, None]
+#     mask = mask.type(x.dtype)
+#     dist_max = dist_matrix.flatten(1).max(dim=-1)[0][:, None, None]
+#     dist, index_parent = (dist_matrix * mask + dist_max * (1 - mask)).min(dim=-1)
+
+#     # select clustering center according to score
+#     score = dist * density
+#     _, index_down = torch.topk(score, k=cluster_num, dim=-1)        
+
+#     # assign tokens to the nearest center
+#     dist_matrix = index_points(dist_matrix, index_down)     
+
+#     idx_cluster = dist_matrix.argmin(dim=1)    
+
+#     # make sure cluster center merge to itself 
+#     idx_batch = torch.arange(B, device=x.device)[:, None].expand(B, cluster_num)
+#     idx_tmp = torch.arange(cluster_num, device=x.device)[None, :].expand(B, cluster_num)
+#     idx_cluster[idx_batch.reshape(-1), index_down.reshape(-1)] = idx_tmp.reshape(-1)
+
+#     # merge tokens
+
+#     B, N, C = x.shape
+#     device = dist_matrix.device
+#     idx_token = torch.arange(N)[None, :].repeat(B, 1).to(device)
+#     agg_weight = x.new_ones(B, N, 1)
+    
+#     token_weight = x.new_ones(B, N, 1)
+#     # self_attn_weights = self_attn_weights.mean(1)
+#     # token_weight = self_attn_weights.sum(dim=1).exp().unsqueeze(2) 
+#     # B_weight,N_weigh,C_weight = token_weight.shape
+#     # token_weight = token_weight.reshape(B_weight*N_weigh, C_weight)[sparse_token_idx.reshape(-1)].reshape(B, N, 1)
+    
+#     idx_batch = torch.arange(B, device=x.device)[:, None]
+#     idx = idx_cluster + idx_batch * cluster_num     
+
+#     all_weight = token_weight.new_zeros(B * cluster_num, 1)
+#     all_weight.index_add_(dim=0, index=idx.reshape(B * N),      
+#                             source=token_weight.reshape(B * N, 1))      
+#     all_weight = all_weight + 1e-6
+#     norm_weight = token_weight / all_weight[idx]       
+
+#     # average token features
+#     x_merged = x.new_zeros(B * cluster_num, C)
+#     source = x * norm_weight
+#     x_merged.index_add_(dim=0, index=idx.reshape(B * N),        
+#                         source=source.reshape(B * N, C).type(x.dtype))
+#     x_merged = x_merged.reshape(B, cluster_num, C)
+    
+#     return x_merged
+
+
+def index_points(points, idx):
+    """Sample features following the index.
+    Returns:
+        new_points:, indexed points data, [B, S, C]
+
+    Args:
+        points: input points data, [B, N, C]
+        idx: sample index data, [B, S]
+    """
+    device = points.device
+    B = points.shape[0]
+    view_shape = list(idx.shape)
+    view_shape[1:] = [1] * (len(view_shape) - 1)
+    repeat_shape = list(idx.shape)
+    repeat_shape[0] = 1
+    batch_indices = torch.arange(B, dtype=torch.long).to(device).view(view_shape).repeat(repeat_shape)
+    new_points = points[batch_indices, idx, :]
+    return new_points
+
 
 
 QWEN2_VL_INPUTS_DOCSTRING = r"""
