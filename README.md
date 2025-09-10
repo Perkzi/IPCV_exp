@@ -4,6 +4,9 @@ ViT-Prunning-self/Qwen2-VL/Qwen2VL_DART_ViT/modeling_qwen2_vl_dart_vit_mean_shif
 
 
 ## 🛠 Preparation
+```bash
+git clone -b vit_mean_shift git@github.com:shuangchen2003/ViT-Prunning-self.git
+```
 
 ### Qwen2-VL
 ```bash
