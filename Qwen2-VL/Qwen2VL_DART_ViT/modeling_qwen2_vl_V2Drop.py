@@ -1387,11 +1387,11 @@ class DART(Qwen2VLModel):
         device = hidden_states.device
         dtype = hidden_states.dtype
 
-        # 只触发一次
-        if self.config.DART_config is not None and self.config.DART_config['Sparse'] and self.config.DART_config['attn_scores_choose']\
-            and not self.update_attention_layer:
-            self.update_layer(device,dtype)
-            self.update_attention_layer=True
+        # # 只触发一次
+        # if self.config.DART_config is not None and self.config.DART_config['Sparse'] and self.config.DART_config['attn_scores_choose']\
+        #     and not self.update_attention_layer:
+        #     self.update_layer(device,dtype)
+        #     self.update_attention_layer=True
 
         assert batch_size == 1, "batch_size > 1 requires changes to some implementation"
 

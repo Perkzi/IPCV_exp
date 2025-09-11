@@ -574,7 +574,12 @@ class Qwen2VLAttention(nn.Module):
                     "with a layer index."
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+
+        rotary_seq_len = (
+            max(kv_seq_len, position_ids[:, -1].max().item() + 1) if position_ids is not None else kv_seq_len
+        ) # fix high ratio pruning bug
+        cos, sin = self.rotary_emb(value_states, seq_len=rotary_seq_len)
+        #cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_multimodal_rotary_pos_emb(
             query_states, key_states, cos, sin, position_ids, self.rope_scaling["mrope_section"]
         )

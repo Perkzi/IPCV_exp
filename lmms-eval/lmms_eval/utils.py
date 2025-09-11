@@ -504,7 +504,10 @@ def make_table(result_dict, column: str = "results", sort_results: bool = False)
             if m + "_stderr" + "," + f in dic:
                 # if dic[m + "_stderr" + "," + f] != []:
                 se = dic[m + "_stderr" + "," + f]
-                se = "   N/A" if se == "N/A" or se == [] else "%.4f" % se
+                try:
+                    se = "   N/A" if se == "N/A" or se == [] else "%.4f" % se
+                except:
+                    se = "N/A"
                 if v != []:
                     values.append([k, version, f, n, m, hib, v, "±", se])
             else:
@@ -580,7 +583,7 @@ def get_git_commit_hash():
     try:
         git_hash = subprocess.check_output(["git", "describe", "--always"]).strip()
         git_hash = git_hash.decode()
-    except subprocess.CalledProcessError or FileNotFoundError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         # FileNotFoundError occurs when git not installed on system
         git_hash = None
     return git_hash
@@ -594,7 +597,6 @@ def get_datetime_str(timezone="Asia/Singapore"):
     tz = pytz.timezone(timezone)
     utc_now = datetime.datetime.now(datetime.timezone.utc)
     local_time = utc_now.astimezone(tz)
-    return local_time.strftime("%Y%m%d_%H%M%S")
     return local_time.strftime("%Y%m%d_%H%M%S")
 
 

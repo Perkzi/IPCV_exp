@@ -1,4 +1,5 @@
 import math
+import os
 import os.path as osp
 import random as rd
 import string
@@ -10,16 +11,6 @@ import pandas as pd
 import requests
 from loguru import logger as eval_logger
 from tqdm import tqdm
-import os
-
-def set_openai_proxy():
-    proxy_url = "http://10.1.20.57:23128"
-    os.environ['http_proxy'] = proxy_url
-    os.environ['https_proxy'] = proxy_url
-    os.environ['HTTP_PROXY'] = proxy_url
-    os.environ['HTTPS_PROXY'] = proxy_url
-    os.environ['PROXY_STATUS'] = "openai proxy on"
-    print("OpenAI proxy is on.")
 
 
 class MMBench_Evaluator:
@@ -28,6 +19,7 @@ class MMBench_Evaluator:
         self.model_version = model_version
         self.API_KEY = API_KEY
         self.API_URL = API_URL
+        self.API_TYPE = os.getenv("API_TYPE", "openai")
 
     def create_options_prompt(self, row_data, option_candidate):
         available_keys = set(row_data.keys()) & set(option_candidate)
@@ -139,16 +131,21 @@ class MMBench_Evaluator:
         return self.can_infer(item["prediction"], choices)
 
     def _post_request(self, payload):
-        headers = {
-            "Authorization": f"Bearer {self.API_KEY}",
-            "Content-Type": "application/json",
-        }
+        if self.API_TYPE == "azure":
+            headers = {
+                "api-key": self.API_KEY,
+                "Content-Type": "application/json",
+            }
+        else:
+            headers = {
+                "Authorization": f"Bearer {self.API_KEY}",
+                "Content-Type": "application/json",
+            }
         response = requests.post(self.API_URL, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
         return response.json()
 
     def get_chat_response(self, prompt, temperature=0, max_tokens=256, n=1, patience=5, sleep_time=3):
-        set_openai_proxy()  # HACK: openai proxy
         messages = [
             {"role": "user", "content": prompt},
         ]

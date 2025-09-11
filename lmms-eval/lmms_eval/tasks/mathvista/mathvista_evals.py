@@ -1,10 +1,14 @@
 import os
 import re
 import time
+from pathlib import Path
 
 import requests
+import yaml
 from Levenshtein import distance
 from loguru import logger as eval_logger
+
+from lmms_eval.llm_judge import Request, ServerConfig, get_server
 
 # pids: 799, 681, 615
 shot_examples = [
@@ -144,60 +148,46 @@ Model response: The correct answer is (B) 8/11.
 Extracted answer: B
 """
 
+with open(Path(__file__).parent / "mathvista.yaml", "r") as f:
+    raw_data = f.readlines()
+    safe_data = []
+    for i, line in enumerate(raw_data):
+        # remove function definition since yaml load cannot handle it
+        if "!function" not in line:
+            safe_data.append(line)
+
+    config = yaml.safe_load("".join(safe_data))
+
 
 class MathVistaEvaluator:
     API_TYPE = os.getenv("API_TYPE", "openai")
+    gpt_model = os.getenv("MODEL_VERSION", "gpt-4o-2024-11-20")
 
-    if API_TYPE == "openai":
-        API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
-        API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_API_KEY")
-        headers = {
-            "Authorization": f"Bearer {API_KEY}",
-            "Content-Type": "application/json",
-        }
-    elif API_TYPE == "azure":
-        API_URL = os.getenv("AZURE_ENDPOINT", "https://api.cognitive.microsoft.com/sts/v1.0/issueToken")
-        API_KEY = os.getenv("AZURE_API_KEY", "YOUR_API_KEY")
-        headers = {
-            "api-key": API_KEY,
-            "Content-Type": "application/json",
-        }
+    # Initialize llm_judge server
+    server_config = ServerConfig(model_name=gpt_model, temperature=0.0, max_tokens=256, timeout=60, num_retries=5, retry_delay=10)
+    server = get_server(server_name=API_TYPE, config=server_config)
 
-    def __init__(self, api_key, gpt_model="gpt-3.5-turbo", quick_extract=False):
-        self.api_key = api_key
-        self.gpt_model = gpt_model
+    def __init__(self, quick_extract=False):
         self.quick_extract = quick_extract
 
-    def _post_request(self, payload):
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        response = requests.post(self.API_URL, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
-        return response.json()
-
     def get_chat_response(self, prompt, temperature=0, max_tokens=256, n=1, patience=5, sleep_time=0):
-        messages = [
-            {"role": "user", "content": prompt},
-        ]
-        payload = {"model": self.gpt_model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens, "n": n}
-
-        if self.API_TYPE == "azure":
-            payload.pop("model")
+        # Create a custom server config for this specific request with different parameters
+        request_config = ServerConfig(model_name=self.gpt_model, temperature=temperature, max_tokens=max_tokens, timeout=60, num_retries=patience, retry_delay=sleep_time)
 
         while patience > 0:
             patience -= 1
             try:
-                response = self._post_request(payload)
-                if n == 1:
-                    prediction = response["choices"][0]["message"]["content"].strip()
+                # Use the core evaluate method with a Request object for direct text generation
+                request = Request(messages=[{"role": "user", "content": prompt}], config=request_config)
+
+                response = self.server.evaluate(request)
+
+                if response.success:
+                    prediction = response.content.strip()
                     if prediction and prediction != "":
                         return prediction
                 else:
-                    prediction = [choice["message"]["content"].strip() for choice in response["choices"]]
-                    if prediction and prediction[0] != "":
-                        return prediction
+                    eval_logger.error(f"Server evaluation failed: {response.error}")
 
             except Exception as e:
                 if "Rate limit" not in str(e):
@@ -209,9 +199,6 @@ class MathVistaEvaluator:
                     new_size = int(len(prompt) * 0.9)
                     new_start = len(prompt) - new_size
                     prompt = prompt[new_start:]
-                    payload["messages"] = [
-                        {"role": "user", "content": prompt},
-                    ]
 
                 if sleep_time > 0:
                     time.sleep(sleep_time)

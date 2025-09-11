@@ -2390,9 +2390,15 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                         # p=2.0             ：指定用 L2 范数（Euclidean，p=2）；如果 p=1 则是 L1 距离，p=∞ 则是 Chebyshev 距离，等等
                         # 输出 dists       ：shape=[R, K]，其中 dists[i,j] 是 removed_states[i] 和 orig_kept_states[j] 的 p‐范数距离
                         # pairwise distance: [R, K]
-                        dists = torch.cdist(removed_states, orig_kept_states, p=2.0)
+                        #dists = torch.cdist(removed_states, orig_kept_states, p=2.0)
+                        #print(removed_states.shape,orig_kept_states.shape)
+                        dists = torch.cdist(
+                            removed_states.float(), 
+                            orig_kept_states.float(), 
+                            p=2.0
+                        )
                         # topk 最小距离对应的 kept_states 索引： [R, 10]
-                        _, rem_to_kept_idx = dists.topk(10, largest=False, dim=1)
+                        _, rem_to_kept_idx = dists.topk(min(10,orig_kept_states.shape[0]), largest=False, dim=1)
 
                         flat_idx = rem_to_kept_idx.view(-1)                                        # [R*topk]
                         unique_idx, inv_idx = torch.unique(flat_idx, return_inverse=True)          # unique_idx:[U], inv_idx:[R*topk]

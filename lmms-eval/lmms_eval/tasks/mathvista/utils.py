@@ -20,23 +20,7 @@ with open(Path(__file__).parent / "mathvista.yaml", "r") as f:
     config = yaml.safe_load("".join(safe_data))
 
 
-API_TYPE = os.getenv("API_TYPE", "openai")
-if API_TYPE == "openai":
-    API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
-    API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_API_KEY")
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
-elif API_TYPE == "azure":
-    API_URL = os.getenv("AZURE_ENDPOINT", "https://api.cognitive.microsoft.com/sts/v1.0/issueToken")
-    API_KEY = os.getenv("AZURE_API_KEY", "YOUR_API_KEY")
-    headers = {
-        "api-key": API_KEY,
-        "Content-Type": "application/json",
-    }
-
-mathvista_evaluator = MathVistaEvaluator(api_key=API_KEY, gpt_model=config["metadata"]["gpt_eval_model_name"])
+mathvista_evaluator = MathVistaEvaluator()
 
 
 def mathvista_doc_to_visual(doc):
@@ -96,7 +80,7 @@ def mathvista_process_results(doc, results):
     }
 
     return {
-        "gpt_eval_score": result,
+        "llm_as_judge_eval": result,
         "submission": result,
     }
 
@@ -135,10 +119,6 @@ def mathvista_aggregate_results(results, args, *, calculate_gain=False, random_s
                     gain = round(float(scores[key][sub_key]["accuracy"]) - float(random_scores[key][sub_key]["accuracy"]), 2)
                     scores[key][sub_key]["acc_gain"] = gain
 
-    path = generate_submission_file(f"mathvista_{split_flag}_scores.json", args)
-    with open(path, "w") as f:
-        json.dump(results_dict, f, indent=4)
-    eval_logger.info(f"Saved results to {path}")
     if scores["average"]["accuracy"] == 0:
         return None
     return scores["average"]["accuracy"]

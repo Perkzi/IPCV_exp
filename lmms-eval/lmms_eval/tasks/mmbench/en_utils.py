@@ -9,7 +9,6 @@ from loguru import logger as eval_logger
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 from lmms_eval.tasks.mmbench.mmbench_evals import MMBench_Evaluator
 
-
 with open(Path(__file__).parent / "mmbench.yaml", "r") as f:
     raw_data = f.readlines()
     safe_data = []
@@ -20,7 +19,7 @@ with open(Path(__file__).parent / "mmbench.yaml", "r") as f:
 
     config = yaml.safe_load("".join(safe_data))
 
-GPT_EVAL_MODEL_NAME = config["metadata"]["gpt_eval_model_name"]
+GPT_EVAL_MODEL_NAME = os.getenv("MODEL_VERSION", "gpt-4o-2024-11-20")
 API_TYPE = os.getenv("API_TYPE", "openai")
 
 if API_TYPE == "openai":
