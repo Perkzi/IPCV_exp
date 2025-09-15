@@ -29,6 +29,8 @@ except:
     print('FlashAttention2 is not installed.')
     has_flash_attn = False
 
+import math
+
 logger = logging.get_logger(__name__)
 
 
@@ -292,6 +294,7 @@ class InternVisionEncoderLayer(nn.Module):
             hidden_states (`Tuple[torch.FloatTensor, Optional[torch.FloatTensor]]`): input to the layer of shape `(batch, seq_len, embed_dim)`
         """
         attn_outputs = self.attn(self.norm1(hidden_states).to(hidden_states.dtype))
+        #print("attn_out",attn_outputs)
         hidden_states = hidden_states + self.drop_path1(attn_outputs['hidden_states'] * self.ls1)
 
         hidden_states = hidden_states + self.drop_path2(self.mlp(self.norm2(hidden_states).to(hidden_states.dtype)) * self.ls2)
@@ -420,99 +423,108 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
             self.update_attention_layer=True
 
         #--------------------BEGIN------------------------------------
-        hidden_states_pkg = {'hidden_states':hidden_states, # [seq_len, embed_dim]
-                            'k_states':None,                # [seq_len, num_heads, head_dim]  TODO:优化显存占用
-                            'attn_scores':None}                 # [nheads,seqlen,seqlen] TODO: 优化显存占用
+        hidden_states_pkg = {'hidden_states':hidden_states, # [batch_size,seq_len, embed_dim]
+                            'k_states':None,                # [batch_size,seq_len, num_heads, head_dim]  TODO:优化显存占用
+                            'attn_scores':None}                 # [batch_size, nheads,seqlen,seqlen] TODO: 优化显存占用
         #frame_counts = torch.zeros(1, device=device)
         hidden_states_prev = None
-        print("hid state",hidden_states.shape)
+        #print("hid state",hidden_states.shape)
 
         for idx, blk in enumerate(self.layers):
             if output_hidden_states:
                 encoder_states = encoder_states + (hidden_states,)
+
             if self.gradient_checkpointing and self.training:
                 hidden_states_pkg = torch.utils.checkpoint.checkpoint(
                     blk,
-                    hidden_states)
+                    hidden_states
+                )
+                hidden_states = hidden_states_pkg['hidden_states']
             else:
-                #print("vit DART config",self.config.DART_config)
                 DART_config = self.config.DART_config
-                #print("dartconfig",DART_config)
                 if DART_config is not None and DART_config['vit_Sparse']:
                     K = DART_config['vit_pruned_layer']
-                    #image_token_start_index = DART_config['image_token_start_index']
-                    #image_token_length = DART_config['image_token_length']
-                    seq_len = hidden_states_pkg['hidden_states'].shape[0]
-                    
-                    if K-1>0 and idx ==K-1 and DART_config['vit_diff_choose'] and hidden_states_pkg['hidden_states'].shape[0]>1:
-                        hidden_states_prev = hidden_states_pkg['hidden_states'] # K-1层的输入
-                    #print("layer_idx",blk.layer_idx, hidden_states_pkg['hidden_states'].shape)
-                    if idx == K and hidden_states_pkg['hidden_states'].shape[0]>1:
+                    seq_len = hidden_states_pkg['hidden_states'].shape[1]  # (B, N, C) 取 N
+
+                    if K - 1 > 0 and idx == K - 1 and DART_config['vit_diff_choose'] and seq_len > 1:
+                        hidden_states_prev = hidden_states_pkg['hidden_states']  # (B, N, C)
+
+                    if idx == K and seq_len > 1:
                         device = hidden_states_pkg['hidden_states'].device
-                        last_layer_state = hidden_states_pkg['hidden_states'].detach().clone()
-                        #last_layer_state = self.norm(last_layer_state)
-                        k_states = hidden_states_pkg['k_states']  
-                        attn_scores = hidden_states_pkg['attn_scores']
+                        last_layer_state = hidden_states_pkg['hidden_states'].detach().clone()  # (B, N, C)
+                        k_states = hidden_states_pkg['k_states']   # (B, heads, N, C) 或类似
+                        attn_scores = hidden_states_pkg['attn_scores']  # (B, heads, N, N) 或类似
+                        #print("k_states",k_states.shape)
 
-                        if DART_config['vit_attn_scores_choose']:
-                            retained_image_tokens_index = self.get_retained_image_token_attn_scores(
-                                self.config, last_layer_state, k_states,attn_scores).to(device)
-                            # del hidden_states_pkg['attn_scores']
-                            # del attn_scores
-                            # torch.cuda.synchronize()
-                            # gc.collect()
-                            # torch.cuda.empty_cache()
-                            # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
-                        elif DART_config['vit_random_choose']:
-                            # 随机选取
-                            retained_image_tokens_index = self.get_retained_image_token_random(
-                                self.config, last_layer_state, k_states).to(device)
-                        elif DART_config['vit_diff_choose']:
-                            hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
-                            retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+                        B = last_layer_state.shape[0]
+                        keep_indexs_per_batch = []
 
-                        elif DART_config['vit_pivot_sim_choose']:
-                            retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
-                        else:
-                            retained_image_tokens_index = self.get_retained_image_token(
-                                self.config, last_layer_state, k_states).to(device)
+                        for b in range(B):
+                            if DART_config['vit_attn_scores_choose']:
+                                keep_idx = self.get_retained_image_token_attn_scores(
+                                    self.config,
+                                    last_layer_state[b,1:],  # 单样本
+                                    k_states[b,1:],
+                                    attn_scores[b,1:]
+                                ).to(device)
+                            elif DART_config['vit_random_choose']:
+                                keep_idx = self.get_retained_image_token_random(
+                                    self.config,
+                                    last_layer_state[b,1:],
+                                    k_states[b,1:]
+                                ).to(device)
+                            elif DART_config['vit_diff_choose']:
+                                keep_idx = self.get_retained_image_token_diff(
+                                    self.config,
+                                    hidden_states_pkg['hidden_states'][b,1:],
+                                    hidden_states_prev[b,1:],
+                                    last_layer_state[b,1:]
+                                )
+                            elif DART_config['vit_pivot_sim_choose']:
+                                keep_idx = self.get_retained_image_token_pivot_sim(
+                                    self.config,
+                                    last_layer_state[b,1:],
+                                    k_states[b,1:]
+                                )
+                            else:
+                                keep_idx = self.get_retained_image_token(
+                                    self.config,
+                                    last_layer_state[b,1:],
+                                    k_states[b,1:]
+                                ).to(device)
 
-                        # keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index,torch.arange(image_token_start_index+image_token_length,seq_len,device=device)))
-                        #keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index))
-                        # sort index
-                        keep_indexs = retained_image_tokens_index.sort().values
+                            keep_idx = keep_idx.sort().values
+                           
+                            # 所有索引 +1（因为 CLS 在第 0 位）
+                            keep_idx = keep_idx + 1
 
+                            # 在最前面加 CLS 的索引 0
+                            keep_idx = torch.cat([
+                                torch.tensor([0], device=keep_idx.device, dtype=keep_idx.dtype),
+                                keep_idx
+                            ])
+                           
+                            keep_indexs_per_batch.append(keep_idx)
 
-                        # **在这里保存原始序列长度、原始 hidden_states，以及 removed 索引和它们对应的向量**
-                        orig_seq_len = hidden_states_pkg['hidden_states'].shape[0]
+                        # 保存原始长度
+                        orig_seq_len = seq_len
                         orig_states = hidden_states_pkg['hidden_states'].detach().clone()
-                        
-                        # 然后执行真正的剪枝
-                        print("vit_before",hidden_states_pkg['hidden_states'].shape)
-                        print(keep_indexs.shape)
-                        hidden_states_pkg['hidden_states'] = orig_states[keep_indexs,:]
-                        #rotary_pos_emb_pruned = rotary_pos_emb[keep_indexs,:]
-                        #print("vit_after",hidden_states_pkg['hidden_states'].shape)
-                        # …… 计算新的 cu_seqlens
 
-                        # 最后记下来这些供后面拼回用
+                        # 对每个样本单独裁剪
+                        pruned_states = []
+                        for b in range(B):
+                            pruned_states.append(orig_states[b, keep_indexs_per_batch[b], :])
+                        hidden_states_pkg['hidden_states'] = torch.stack(pruned_states, dim=0)
+                        hidden_states = hidden_states_pkg['hidden_states']
+
+
                         self._sparse_vit_saved = {
-                            "orig_seq_len": orig_seq_len,
-                            #"keep_indexs": keep_indexs,
-                            #"removed_indices": removed_indices,
-                            #"removed_states": removed_states,
-                            #"orig_kept_states": orig_kept_states
+                            "orig_seq_len": orig_seq_len
                         }
-                    
-                    
-                    
-            # ------------------------END------------------------------------------
-                
-                hidden_states_pkg = blk(
-                    hidden_states,
-                )
+                #print("hid state",hidden_states.shape)
+                hidden_states_pkg = blk(hidden_states)
 
-                if idx == self.config.num_hidden_layers-1 and hasattr(self, "_sparse_vit_saved"):
+                if idx == self.config.num_hidden_layers - 1 and hasattr(self, "_sparse_vit_saved"):
                     del self._sparse_vit_saved
 
             hidden_states = hidden_states_pkg['hidden_states']
@@ -525,6 +537,88 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
         return BaseModelOutput(
             last_hidden_state=hidden_states, hidden_states=encoder_states
         )
+
+
+        # for idx, blk in enumerate(self.layers):
+        #     if output_hidden_states:
+        #         encoder_states = encoder_states + (hidden_states,)
+        #     if self.gradient_checkpointing and self.training:
+        #         hidden_states_pkg = torch.utils.checkpoint.checkpoint(
+        #             blk,
+        #             hidden_states)
+        #     else:
+        #         #print("vit DART config",self.config.DART_config)
+        #         DART_config = self.config.DART_config
+        #         #print("dartconfig",DART_config)
+        #         if DART_config is not None and DART_config['vit_Sparse']:
+        #             K = DART_config['vit_pruned_layer']
+        #             #image_token_start_index = DART_config['image_token_start_index']
+        #             #image_token_length = DART_config['image_token_length']
+        #             seq_len = hidden_states_pkg['hidden_states'].shape[0]
+                    
+        #             if K-1>0 and idx ==K-1 and DART_config['vit_diff_choose'] and hidden_states_pkg['hidden_states'].shape[0]>1:
+        #                 hidden_states_prev = hidden_states_pkg['hidden_states'] # K-1层的输入
+        #             #print("layer_idx",blk.layer_idx, hidden_states_pkg['hidden_states'].shape)
+        #             if idx == K and hidden_states_pkg['hidden_states'].shape[0]>1:
+        #                 device = hidden_states_pkg['hidden_states'].device
+        #                 last_layer_state = hidden_states_pkg['hidden_states'].detach().clone()
+        #                 #last_layer_state = self.norm(last_layer_state)
+        #                 k_states = hidden_states_pkg['k_states']  
+        #                 attn_scores = hidden_states_pkg['attn_scores']
+
+        #                 if DART_config['vit_attn_scores_choose']:
+        #                     retained_image_tokens_index = self.get_retained_image_token_attn_scores(
+        #                         self.config, last_layer_state, k_states,attn_scores).to(device)
+        #                     # del hidden_states_pkg['attn_scores']
+        #                     # del attn_scores
+        #                     # torch.cuda.synchronize()
+        #                     # gc.collect()
+        #                     # torch.cuda.empty_cache()
+        #                     # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
+        #                 elif DART_config['vit_random_choose']:
+        #                     # 随机选取
+        #                     retained_image_tokens_index = self.get_retained_image_token_random(
+        #                         self.config, last_layer_state, k_states).to(device)
+        #                 elif DART_config['vit_diff_choose']:
+        #                     hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
+        #                     retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+
+        #                 elif DART_config['vit_pivot_sim_choose']:
+        #                     retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
+        #                 else:
+        #                     retained_image_tokens_index = self.get_retained_image_token(
+        #                         self.config, last_layer_state, k_states).to(device)
+
+        #                 # keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index,torch.arange(image_token_start_index+image_token_length,seq_len,device=device)))
+        #                 #keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index))
+        #                 # sort index
+        #                 keep_indexs = retained_image_tokens_index.sort().values
+
+
+        #                 # **在这里保存原始序列长度、原始 hidden_states，以及 removed 索引和它们对应的向量**
+        #                 orig_seq_len = hidden_states_pkg['hidden_states'].shape[0]
+        #                 orig_states = hidden_states_pkg['hidden_states'].detach().clone()
+                        
+                        
+        #                 # 然后执行真正的剪枝
+        #                 print("vit_before",hidden_states_pkg['hidden_states'].shape)
+        #                 print(keep_indexs.shape)
+        #                 hidden_states_pkg['hidden_states'] = orig_states[keep_indexs,:]
+        #                 #rotary_pos_emb_pruned = rotary_pos_emb[keep_indexs,:]
+        #                 #print("vit_after",hidden_states_pkg['hidden_states'].shape)
+        #                 # …… 计算新的 cu_seqlens
+
+        #                 # 最后记下来这些供后面拼回用
+        #                 self._sparse_vit_saved = {
+        #                     "orig_seq_len": orig_seq_len,
+        #                     #"keep_indexs": keep_indexs,
+        #                     #"removed_indices": removed_indices,
+        #                     #"removed_states": removed_states,
+        #                     #"orig_kept_states": orig_kept_states
+        #                 }
+                    
+                    
+
     
     def get_retained_image_token(self, config, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
         # any_state [seq_len, num_heads, head_dim]
@@ -534,7 +628,7 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
         image_token_length = last_layer_state.shape[0]
 
         pivot_image_token = DART_config['pivot_image_token']
-        pivot_text_token = DART_config['pivot_text_token']
+        # pivot_text_token = DART_config['pivot_text_token']
 
         reduction_ratio = DART_config['vit_reduction_ratio']
         # # 计算原始值
@@ -549,13 +643,29 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
         # else:
         #     TOKEN_TOPK = TOKEN_TOPK_up
 
-        # 计算原始值
-        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
+        # # 计算原始值
+        # TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / (pivot_image_token)
 
-        # 找到比 TOKEN_TOPK_RAW 小的最大平方数
-        import math
-        max_square_root = int(math.sqrt(TOKEN_TOPK_RAW))  # 向下取整平方根
-        TOKEN_TOPK = max_square_root ** 2  # 得到平方数
+        # # 找到比 TOKEN_TOPK_RAW 小的最大平方数
+        # import math
+        # max_square_root = int(math.sqrt(pivot_image_token*TOKEN_TOPK_RAW))  # 向下取整平方根
+        # TOKEN_TOPK = max_square_root ** 2  # 得到平方数
+
+        # 原始计算
+        TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio) / pivot_image_token
+
+        # 最大可能的平方根
+        max_square_root = int(math.sqrt(pivot_image_token * (TOKEN_TOPK_RAW+1)))
+
+        # 从 max_square_root 往下找，直到找到既是平方数又是 pivot_image_token 的倍数
+        TOKEN_TOPK = 0
+        for r in range(max_square_root, 0, -1):
+            candidate = r ** 2
+            if candidate % pivot_image_token == 0:
+                TOKEN_TOPK = int(candidate /pivot_image_token - 1)
+                break
+        #print("topk",TOKEN_TOPK)
+
 
         # 向下取
         # TOKEN_TOPK = TOKEN_TOPK_down - 1
@@ -582,6 +692,7 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
         for item in list(indices_set):
             valid_vectors = last_layer_state[valid_indices_list, :] # last_layer_state中待处理image token的对应向量 [valid_seq_len - num_pivot_tokens, hidden_dim]
             cos_sim = -torch.nn.functional.cosine_similarity(last_layer_state[item, :], valid_vectors, dim=-1) # 计算余弦相似度 [valid_seq_len - num_pivot_tokens]
+            #print("cossim",cos_sim.shape)
             top_k_indices = cos_sim.topk(TOKEN_TOPK).indices
 
             top_k_real_indices = [valid_indices_list[i] for i in top_k_indices] # 待保留的image token的index
@@ -618,7 +729,7 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
         TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
 
         # 找到比 TOKEN_TOPK_RAW 小的最大平方数
-        import math
+        
         max_square_root = int(math.sqrt(TOKEN_TOPK_RAW))  # 向下取整平方根
         retained_count = max_square_root ** 2  # 得到平方数
 
@@ -657,7 +768,7 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
         TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
 
         # 找到比 TOKEN_TOPK_RAW 小的最大平方数
-        import math
+        
         max_square_root = int(math.sqrt(TOKEN_TOPK_RAW))  # 向下取整平方根
         TOKEN_TOPK = max_square_root ** 2  # 得到平方数
         device = last_layer_state.device
@@ -694,11 +805,11 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
         
 
         # 找到比 TOKEN_TOPK_RAW 小的最大平方数
-        import math
+        
         max_square_root = int(math.sqrt(TOKEN_TOPK_RAW))  # 向下取整平方根
         TOKEN_TOPK = max_square_root ** 2  # 得到平方数
 
-        print("topk",TOKEN_TOPK_RAW,TOKEN_TOPK)
+        #print("topk",TOKEN_TOPK_RAW,TOKEN_TOPK)
         # # 向下取
         # TOKEN_TOPK = TOKEN_TOPK_down - 1
         device = last_layer_state.device
@@ -733,7 +844,7 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
         TOKEN_TOPK_RAW = image_token_length * (1 - reduction_ratio)
 
         # 找到比 TOKEN_TOPK_RAW 小的最大平方数
-        import math
+        
         max_square_root = int(math.sqrt(TOKEN_TOPK_RAW))  # 向下取整平方根
         TOKEN_TOPK = max_square_root ** 2  # 得到平方数
         
