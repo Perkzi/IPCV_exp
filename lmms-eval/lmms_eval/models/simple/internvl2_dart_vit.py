@@ -15,6 +15,33 @@ from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
 
+import sys
+sys.path.append('~/ViT-Prunning-self/InternVL2/')
+
+# wrong version
+# from transformers import InternVLForConditionalGeneration
+# from transformers import AutoConfig
+#from InternVL2_DART_ViT import InternVLForConditionalGeneration
+
+from InternVL2_DART_ViT import InternVLChatModel
+
+import logging
+logging.getLogger("transformers.generation.utils").setLevel(logging.ERROR)
+
+
+def configure_DART(model, config):
+
+
+    #model.config.DART_config = config
+    #model.visual.config.DART_config = config
+
+    #model.vision_tower.config.DART_config = config
+
+    model.language_model.config.DART_config = config
+    model.vision_model.config.DART_config = config
+
+
+
 eval_logger = logging.getLogger("eval_logger")
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -146,6 +173,9 @@ def split_model(model_name, num_layers=None):
             "InternVL2-26B": 48,
             "InternVL2-40B": 60,
             "InternVL2-Llama3-76B": 80,
+
+            "InternVL3-8B": 32,  
+            "InternVL3-38B": 64,  # 38B 对应 64 层
         }[model_name]
     # Since the first GPU will be used for ViT, treat it as half a GPU.
     num_layers_per_gpu = math.ceil(num_layers / (world_size - 0.5))
@@ -165,6 +195,13 @@ def split_model(model_name, num_layers=None):
     device_map["language_model.lm_head"] = 0
     device_map[f"language_model.model.layers.{num_layers - 1}"] = 0
 
+    # for wrong version InternVLForConditionalGeneration only
+    # device_map["model.language_model.embed_tokens"] = 0
+    # device_map["model.language_model.output"] = 0
+    # device_map["model.language_model.norm"] = 0
+    # device_map["lm_head"] = 0
+
+
     return device_map
 
 
@@ -181,6 +218,7 @@ class InternVL2_DART_ViT(lmms):
         num_layers=None,
 
 
+        use_flash_attention_2 = False,
         attn_implementation="flash_attention_2",
         Sparse=True,
         pruned_layer=2,
@@ -231,8 +269,80 @@ class InternVL2_DART_ViT(lmms):
             self._device = torch.device(f"cuda:{accelerator.local_process_index}")
             self.device_map = f"cuda:{accelerator.local_process_index}"
 
-        self._model = AutoModel.from_pretrained(self.path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True, device_map=self.device_map).eval()
+        #self._model = AutoModel.from_pretrained(self.path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True, device_map=self.device_map).eval()
+        if use_flash_attention_2:
+            self._model = InternVLChatModel.from_pretrained(
+                self.path,
+                torch_dtype=torch.bfloat16, 
+                low_cpu_mem_usage=True, 
+                trust_remote_code=True, 
+                device_map=self.device_map,
+                attn_implementation="flash_attention_2",
+                ).eval()
+        else:
+            self._model = InternVLChatModel.from_pretrained(
+                self.path,
+                torch_dtype=torch.bfloat16, 
+                low_cpu_mem_usage=True, 
+                trust_remote_code=True, 
+                device_map=self.device_map,
+                ).eval()
+        
+
+        # wrong version
+        # cfg = AutoConfig.from_pretrained("OpenGVLab/InternVL3-38B", trust_remote_code=True)
+        # self._model = InternVLForConditionalGeneration.from_pretrained(
+        #     self.path, config=cfg, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True, device_map=self.device_map
+        # ).eval()
+
+        # if use_flash_attention_2:
+        #     self._model = InternVLForConditionalGeneration.from_pretrained(
+        #         pretrained,
+        #         torch_dtype=torch.bfloat16,
+        #         low_cpu_mem_usage=True,
+        #         trust_remote_code=True,
+        #         device_map=self.device_map,
+        #         attn_implementation="flash_attention_2",
+        #     ).eval()
+        # else:
+        #     self._model = InternVLForConditionalGeneration.from_pretrained(
+        #         pretrained,
+        #         torch_dtype="auto",
+        #         low_cpu_mem_usage=True,
+        #         trust_remote_code=True,
+        #         device_map=self.device_map
+        #     ).eval()
+        
+        
         self._tokenizer = AutoTokenizer.from_pretrained(self.path, trust_remote_code=True, device_map=self.device_map)
+
+
+
+        DART_config = {
+            "Sparse": Sparse,
+            "pruned_layer": pruned_layer,
+            "reduction_ratio": reduction_ratio,
+            "vit_Sparse": vit_Sparse,
+            "vit_pruned_layer": vit_pruned_layer,
+            "vit_reduction_ratio": vit_reduction_ratio,
+
+            "image_token_start_index": image_token_start_index,
+            "image_token_length": image_token_length,
+            "max_num_trunction": max_num_trunction,
+            "pivot_image_token": pivot_image_token,
+            "pivot_text_token": pivot_text_token,
+
+            "random_choose": random_choose,
+            "attn_scores_choose":attn_scores_choose,
+            "diff_choose":diff_choose,
+            "pivot_sim_choose":pivot_sim_choose,
+
+            "vit_random_choose": vit_random_choose,
+            "vit_attn_scores_choose":vit_attn_scores_choose,
+            "vit_diff_choose":vit_diff_choose,
+            "vit_pivot_sim_choose":vit_pivot_sim_choose
+        }
+        configure_DART(self._model, DART_config) # HACK
 
         if accelerator.num_processes > 1:
             assert accelerator.distributed_type in [DistributedType.FSDP, DistributedType.MULTI_GPU, DistributedType.DEEPSPEED], "Unsupported distributed type provided. Only DDP and FSDP are supported."
@@ -349,6 +459,9 @@ class InternVL2_DART_ViT(lmms):
                 video_prefix = "".join([f"Frame{i+1}: <image>\n" for i in range(len(num_patches_list))])
                 question = video_prefix + contexts
                 response, history = self.model.chat(self.tokenizer, pixel_values, question, gen_kwargs, num_patches_list=num_patches_list, history=None, return_history=True)
+            
+            
+            
             res.append(response)
             pbar.update(1)
         pbar.close()

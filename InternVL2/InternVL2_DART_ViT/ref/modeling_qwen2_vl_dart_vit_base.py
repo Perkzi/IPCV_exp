@@ -1488,11 +1488,7 @@ class DART(Qwen2VLModel):
                         #print("po",position_ids.shape,keep_indexs.shape)#torch.Size([3, 1, 1378]) torch.Size([354])
                         position_ids = position_ids[:, :, keep_indexs]
                         #print(causal_mask,position_ids.shape)None torch.Size([3, 1, 354])
-
-                # if causal_mask is not None:
-                #     print("causal_mask",causal_mask,causal_mask.shape)
-                # else:
-                #     print("None")
+                
                 layer_outputs = decoder_layer(
                     hidden_states,
                     attention_mask=causal_mask,

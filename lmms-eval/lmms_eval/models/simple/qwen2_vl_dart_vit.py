@@ -115,6 +115,7 @@ class Qwen2_VL_DART_ViT(lmms):
             self._model = Qwen2VLForConditionalGeneration.from_pretrained(pretrained, torch_dtype=torch_dtype, device_map=self.device_map).eval()
 
         self.processor = AutoProcessor.from_pretrained(pretrained, max_pixels=max_pixels, min_pixels=min_pixels)
+        #print("config_size",pretrained,self.processor.text_config.hidden_size, self.processor.text_config.vocab_size)
         self.max_pixels = max_pixels
         self.min_pixels = min_pixels
         self.max_num_frames = max_num_frames
