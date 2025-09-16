@@ -643,6 +643,9 @@ class Qwen2Model_Sparse(Qwen2Model):
 
         target_layer_indices = [3,7,16]
         prev_target_layers = [2, 6, 15]
+        if len(self.layers) > 60:
+            target_layer_indices = {3,23,43}
+            prev_target_layers = {2, 22, 42}
 
         # 只触发一次
         if self.config.DART_config is not None and self.config.DART_config['Sparse']\

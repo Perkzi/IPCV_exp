@@ -659,6 +659,9 @@ class Qwen2Model_Sparse(Qwen2Model):
 
         target_layer_indices = {3,17,22}
         prev_target_layers = {2, 16, 21}
+        if len(self.layers) > 60:
+            target_layer_indices = {3,23,43}
+            prev_target_layers = {2, 22, 42}
 
         DART_config = self.config.DART_config
         image_token_start_index = DART_config['image_token_start_index']
