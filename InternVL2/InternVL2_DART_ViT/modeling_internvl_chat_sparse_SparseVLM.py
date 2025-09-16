@@ -23,10 +23,10 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from .configuration_internvl_chat import InternVLChatConfig
 from .conversation import get_conv_template
 
-from .modeling_intern_vit_sparse_IPCV import InternVisionModel_Sparse, has_flash_attn
+from .modeling_intern_vit_sparse_SparseVLM import InternVisionModel_Sparse, has_flash_attn
 
 
-from .modeling_qwen2_sparse_IPCV import Qwen2ForCausalLM_Sparse
+from .modeling_qwen2_sparse_SparseVLM import Qwen2ForCausalLM_Sparse
 
 logger = logging.get_logger(__name__)
 
@@ -367,11 +367,41 @@ class InternVLChatModel(PreTrainedModel):
             input_ids = input_ids.reshape(B * N)
             selected = (input_ids == self.img_context_token_id)
             assert selected.sum() != 0
-            input_embeds[selected] = vit_embeds.reshape(-1, C).to(input_embeds.device)
 
-            #print("input embed",input_embeds.shape,input_embeds[selected].shape)
+            # pruning adjust
+            vit_embeds = vit_embeds.reshape(-1, C).to(input_embeds.device)
+            num_vit_tokens = vit_embeds.shape[0]
+            self.language_model.config.DART_config['image_token_length'] = num_vit_tokens
+            # 找到 selected 的索引位置
+            #selected_idx = torch.nonzero(selected, as_tuple=False).squeeze(1)
 
-            input_embeds = input_embeds.reshape(B, N, C)
+            # 只取前 num_vit_tokens 个位置
+            selected = torch.nonzero(selected, as_tuple=False).squeeze(1)
+            #print("sel",selected.shape,selected,input_ids[selected[0]])
+            selected_idx = selected[:num_vit_tokens]
+            #print("sel2",selected_idx)
+
+            keep_len = min(selected_idx.shape[0], num_vit_tokens)
+
+
+            # 1. 保留 selected 前面的部分
+            before_part = input_embeds[:selected[0], :]
+
+            # 2. 中间部分用 vit_embeds 替换（长度 = keep_len）
+            middle_part = vit_embeds.to(input_embeds.device)
+
+            # 3. 保留 selected 最后一个位置之后的部分
+            after_part = input_embeds[selected[-1] + 1:, :]
+
+            # 4. 拼接成新的 input_embeds
+            input_embeds = torch.cat([before_part, middle_part, after_part], dim=0)
+
+
+            # input_embeds[selected] = vit_embeds.reshape(-1, C).to(input_embeds.device)
+
+            #print("input embed",input_embeds.shape)
+
+            input_embeds = input_embeds.reshape(B, -1, C)
         else:
             input_embeds = self.language_model.get_input_embeddings()(input_ids)
 

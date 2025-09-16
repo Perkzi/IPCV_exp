@@ -407,7 +407,7 @@ def bipartite_soft_fusion(metric, x, r, mode="mean", method="average"):
     dst_pos = idx_b
 
     src, dst = x[..., ::2, :], x[..., 1::2, :]
-    unm = src.gather(dim=-2, index=unm_idx.expand(B, T//2 - r, C))
+    unm = src.gather(dim=-2, index=unm_idx.expand(B, math.ceil(T / 2) - r, C))
 
     if method == "pruned":
         # 直接丢掉 src，不做合并

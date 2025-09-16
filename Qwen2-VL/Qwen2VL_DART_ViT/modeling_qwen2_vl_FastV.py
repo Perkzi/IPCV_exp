@@ -1455,11 +1455,11 @@ class DART(Qwen2VLModel):
                         retained_image_tokens_index = self.get_retained_image_token_attn_scores(
                             self.config, last_layer_state, k_states,attn_scores).to(device)
                         #print("CUDA memory before clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
-                        del layer_outputs['attn_scores']
-                        del attn_scores
-                        torch.cuda.synchronize()
-                        gc.collect()
-                        torch.cuda.empty_cache()
+                        # del layer_outputs['attn_scores']
+                        # del attn_scores
+                        # torch.cuda.synchronize()
+                        # gc.collect()
+                        # torch.cuda.empty_cache()
                         #print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
                         # elif DART_config['random_choose']:
                         #     # 随机选取

@@ -415,7 +415,7 @@ def bipartite_soft_merge(metric: torch.Tensor, x: torch.Tensor, r: int, mode="me
 
     # 特征合并
     src, dst = x[..., ::2, :], x[..., 1::2, :]
-    unm = src.gather(dim=-2, index=unm_idx.expand(B, T//2 - r, C))
+    unm = src.gather(dim=-2, index=unm_idx.expand(B, math.ceil(T / 2) - r, C))
     src = src.gather(dim=-2, index=src_idx.expand(B, r, C))
     dst = dst.scatter_reduce(-2, dst_idx.expand(B, r, C), src, reduce=mode)
 
