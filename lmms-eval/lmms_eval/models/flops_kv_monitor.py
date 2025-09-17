@@ -13,7 +13,7 @@ class KVFlopsMeter:
         # FLOPs
         print("input",inputs,inputs[0].shape)
         x = inputs[0]
-        
+        print(x.shape,len(x.shape))
         if not isinstance(x, torch.Tensor):
             return
         if len(x.shape)==3:
