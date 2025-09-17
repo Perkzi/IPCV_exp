@@ -27,6 +27,9 @@ except ImportError:
     eval_logger.warning("Failed to import qwen_vl_utils; Please install it via `pip install qwen-vl-utils`")
 
 
+from ..flops_kv_monitor import KVFlopsMeter
+
+
 def configure_DART(model, config):
 
     
@@ -232,6 +235,12 @@ class Qwen2_VL_DART_ViT(lmms):
             # - any OOMs will happen right away rather than near the end
             toks = self.tokenizer.encode(x[0])
             return -len(toks), x[0]
+        
+
+        # ---------------compute kv1-----------------------------
+        # meter = KVFlopsMeter(self.model)
+        # meter.start()
+        # ---------------compute kv-----------------------------
 
         pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
         # we group requests by their generation_kwargs,
@@ -349,6 +358,10 @@ class Qwen2_VL_DART_ViT(lmms):
                 self.config.DART_config['image_token_length'] = image_token_length
                 # HACK
 
+            # ---------------compute kv2-----------------------------
+            # meter.record_sample()
+            # ---------------compute kv-----------------------------
+
             cont = self.model.generate(
                 **inputs,
                 eos_token_id=self.tokenizer.eos_token_id,
@@ -360,6 +373,10 @@ class Qwen2_VL_DART_ViT(lmms):
                 max_new_tokens=gen_kwargs["max_new_tokens"],
                 use_cache=self.use_cache,
             )
+
+
+
+
 
             generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
             answers = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
@@ -383,8 +400,25 @@ class Qwen2_VL_DART_ViT(lmms):
             # reorder this group of results back to original unsorted form
         res = re_ords.get_original(res)
 
+        # ---------------compute kv3-----------------------------
+        # meter.stop()
+        # avg_flops, avg_kv_MB = meter.get_results()
+        # print(f"平均 FLOPs: {avg_flops/1e9:.2f} GFLOPs, 平均 KV Cache: {avg_kv_MB:.2f} MB")
+        # ---------------compute kv-----------------------------
+
+
         pbar.close()
         return res
 
     def generate_until_multi_round(self, requests) -> List[str]:
         raise NotImplementedError("TODO: Implement multi-round generation")
+
+
+
+
+
+
+
+
+
+

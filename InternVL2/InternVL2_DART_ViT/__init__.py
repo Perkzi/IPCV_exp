@@ -6,12 +6,12 @@
 
 # from .modeling_internvl_chat import InternVLChatModel
 #from .modeling_internvl_chat_sparse import InternVLChatModel
-#from .modeling_internvl_chat_sparse_IPCV import InternVLChatModel
+from .modeling_internvl_chat_sparse_IPCV import InternVLChatModel
 #from .modeling_internvl_chat_sparse_FastV import InternVLChatModel
 #from .modeling_internvl_chat_sparse_SparseVLM import InternVLChatModel
 #from .modeling_internvl_chat_sparse_V2Drop import InternVLChatModel
 #from .modeling_internvl_chat_sparse_ToMe import InternVLChatModel
-from .modeling_internvl_chat_sparse_Token_fusion import InternVLChatModel
+#from .modeling_internvl_chat_sparse_Token_fusion import InternVLChatModel
 
 
 
