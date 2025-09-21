@@ -151,7 +151,6 @@ class Qwen2Attention(nn.Module):
     ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
-        
 
         query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
@@ -170,8 +169,6 @@ class Qwen2Attention(nn.Module):
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
-        print("query",query_states.shape,attention_mask)
-        print("kwargs keys:", kwargs.keys())
         attn_output, attn_weights = attention_interface(
             self,
             query_states,

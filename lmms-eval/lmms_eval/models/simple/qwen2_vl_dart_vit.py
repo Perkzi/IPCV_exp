@@ -28,6 +28,7 @@ except ImportError:
 
 
 from ..flops_kv_monitor import KVFlopsMeter
+import time
 
 
 def configure_DART(model, config):
@@ -54,10 +55,10 @@ class Qwen2_VL_DART_ViT(lmms):
         use_flash_attention_2: Optional[bool] = False,
         # max_pixels: int = 12845056,
         # min_pixels: int = 3136,
-        max_pixels: int = 602112,
-        min_pixels: int = 3136,
-        # max_pixels: int = 16384*28*28,
-        # min_pixels: int = 1280*28*28,
+        # max_pixels: int = 602112,
+        # min_pixels: int = 3136,
+        max_pixels: int = 16384*28*28,
+        min_pixels: int = 1280*28*28,
         max_num_frames: int = 32,
 
         attn_implementation="flash_attention_2",
@@ -88,6 +89,8 @@ class Qwen2_VL_DART_ViT(lmms):
         super().__init__()
         # Do not use kwargs for now
         assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
+
+        #print("max_pixels",max_pixels,min_pixels)
 
         accelerator = Accelerator()
         if accelerator.num_processes > 1:
@@ -238,8 +241,10 @@ class Qwen2_VL_DART_ViT(lmms):
         
 
         # ---------------compute kv1-----------------------------
-        # meter = KVFlopsMeter(self.model)
-        # meter.start()
+        compute_flops_kv = True
+        if compute_flops_kv:
+            meter = KVFlopsMeter(self.model)
+            meter.start()
         # ---------------compute kv-----------------------------
 
         pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
@@ -248,6 +253,12 @@ class Qwen2_VL_DART_ViT(lmms):
         # in the same batch.
         re_ords = utils.Collator([reg.args for reg in requests], _collate, grouping=True)
         chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
+
+        # ---------------compute time-------------
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        total_infer_time = 0.0
+        # ---------------compute time-------------
         for chunk in chunks:
             contexts, all_gen_kwargs, doc_to_visual, doc_id, task, split = zip(*chunk)
             task = task[0]
@@ -359,9 +370,14 @@ class Qwen2_VL_DART_ViT(lmms):
                 # HACK
 
             # ---------------compute kv2-----------------------------
-            # meter.record_sample()
+            if compute_flops_kv:
+                meter.record_sample()
             # ---------------compute kv-----------------------------
 
+            # ---------------compute time-------------
+            torch.cuda.synchronize()  
+            start_event.record()
+            # ---------------compute time-------------
             cont = self.model.generate(
                 **inputs,
                 eos_token_id=self.tokenizer.eos_token_id,
@@ -373,9 +389,12 @@ class Qwen2_VL_DART_ViT(lmms):
                 max_new_tokens=gen_kwargs["max_new_tokens"],
                 use_cache=self.use_cache,
             )
-
-
-
+            
+            # ---------------compute time-------------
+            end_event.record()
+            torch.cuda.synchronize()  # 等待 generate 完成
+            total_infer_time += start_event.elapsed_time(end_event)  # 毫秒
+            # ---------------compute time-------------
 
 
             generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
@@ -401,10 +420,19 @@ class Qwen2_VL_DART_ViT(lmms):
         res = re_ords.get_original(res)
 
         # ---------------compute kv3-----------------------------
-        # meter.stop()
-        # avg_flops, avg_kv_MB = meter.get_results()
-        # print(f"平均 FLOPs: {avg_flops/1e9:.2f} GFLOPs, 平均 KV Cache: {avg_kv_MB:.2f} MB")
+        if compute_flops_kv:
+            meter.stop()
+            avg_flops, avg_kv_MB = meter.get_results()
+            print(f"Average FLOPs: {avg_flops/1e9:.2f} GFLOPs, Average KV Cache: {avg_kv_MB:.2f} MB")
         # ---------------compute kv-----------------------------
+        if self.rank == 0:  # 多卡时只在主进程打印
+            # total_infer_time 单位是毫秒
+            total_seconds = total_infer_time / 1000
+            minutes = int(total_seconds // 60)
+            seconds = total_seconds % 60
+
+            print(f"Total pure GPU inference time: {minutes} min {seconds:.2f} sec")
+
 
 
         pbar.close()

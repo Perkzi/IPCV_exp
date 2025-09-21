@@ -8,11 +8,11 @@
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
 #export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
-tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "seedbench" "textvqa" "vizwiz_vqa" "ocrbench")
+tasks=("mmbench_en" )
 pruned_layers=(3)
-reduction_ratios=(0.582 0.936)
+reduction_ratios=(0.385 0.622)
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.8)
+vit_reduction_ratios=(0)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -56,11 +56,11 @@ for task in "${tasks[@]}"; do
           vit_pivot_sim_choose=False
 
           torch_dtype=float16
-          GPU=0,1,2,5
+          GPU=4
 
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
-              --num_processes=4 \
+              --num_processes=1 \
               --main_process_port 50008 \
               -m lmms_eval \
               --model qwen2_vl_dart_vit \

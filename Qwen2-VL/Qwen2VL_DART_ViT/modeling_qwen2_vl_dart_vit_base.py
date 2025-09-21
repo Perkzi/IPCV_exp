@@ -700,6 +700,8 @@ class Qwen2VLFlashAttention2(Qwen2VLAttention):
                     attention_mask = torch.cat([attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1)
 
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
+
+            #print("attn key_states",key_states.shape)
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         # repeat k/v heads if n_kv_heads < n_heads
@@ -879,6 +881,7 @@ class Qwen2VLDecoderLayer(nn.Module):
                 f"Sliding Window Attention is enabled but not implemented for `{config._attn_implementation}`; "
                 "unexpected results may be encountered."
             )
+        # self.layer_idx = layer_idx
         self.self_attn = QWEN2_VL_ATTENTION_CLASSES[self.attn_implementation](config, layer_idx)
 
         self.mlp = Qwen2MLP(config)
@@ -944,7 +947,7 @@ class Qwen2VLDecoderLayer(nn.Module):
         #causal_msk torch.Size([1, 1, 3584]) None DynamicCache() torch.Size([3, 1, 1])
         #cache torch.Size([1, 4, 1550, 128])
 
-        
+        #print("layer input",hidden_states.shape)
     
         hidden_states, self_attn_weights, present_key_value, query_states, key_states, value_states = self.self_attn(
             hidden_states=hidden_states,
@@ -955,6 +958,8 @@ class Qwen2VLDecoderLayer(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
         )
+        #print("layer output",present_key_value[self.layer_idx][0].shape)
+
         hidden_states = residual + hidden_states
 
         # Fully Connected
@@ -1397,6 +1402,7 @@ class DART(Qwen2VLModel):
         assert batch_size == 1, "batch_size > 1 requires changes to some implementation"
 
         for i, decoder_layer in enumerate(self.layers):
+            
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
             #print(self.gradient_checkpointing) # false
@@ -1792,6 +1798,10 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+
+        self.time_cost_vit = 0
+        self.time_cost_llm = 0
+
     def get_input_embeddings(self):
         return self.model.embed_tokens
 
@@ -2057,8 +2067,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 if self.config.DART_config is not None and self.config.DART_config['vit_Sparse']:
                     # vision数量变化
                     image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size**2
-                    # time_vit_end = time.time()
-                    #print("time_cost_vit", time_vit_end - time_vit_start)
+                    
                     image_embeds.to(inputs_embeds.device)
 
                     input_ids_new, retained_indices = _update_ids(input_ids, self.config.image_token_id, retained_nums)
@@ -2087,6 +2096,10 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                         inputs_embeds = inputs_embeds.clone()
                     # 把 image_embeds填入这些 <image> token 的 embedding 位置：
                     inputs_embeds[image_mask] = image_embeds
+
+                # time_vit_end = time.time()
+                # self.time_cost_vit += time_vit_end - time_vit_start
+                
                     
                 
             if pixel_values_videos is not None:
@@ -2117,6 +2130,8 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
+
+        # time_llm_start = time.time()
         outputs = self.model(
             input_ids=None,
             position_ids=position_ids,
@@ -2128,6 +2143,9 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             output_hidden_states=output_hidden_states, # bool
             return_dict=return_dict, # bool
         )
+        # time_llm_end = time.time()
+        # self.time_cost_llm += time_llm_end - time_llm_start
+        # print("time_cost_vit", self.time_cost_vit,"time_cost_llm", self.time_cost_llm)
 
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
