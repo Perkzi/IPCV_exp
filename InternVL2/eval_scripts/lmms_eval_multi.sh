@@ -69,6 +69,9 @@ for task in "${tasks[@]}"; do
           #GPU=0,1,2,3
           GPU=2,3,5,7
 
+          # 定义log文件名
+          log_file="${output_path}/run_detail.log"
+
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
               --num_processes=4 \
               --main_process_port 50008 \
@@ -78,7 +81,7 @@ for task in "${tasks[@]}"; do
               --tasks "${task}" \
               --batch_size 1 \
               --log_samples \
-              --output_path "$output_path"
+              --output_path "$output_path" 2>&1 | tee "$log_file"
 
           # CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
           #   --num_processes=1 \
