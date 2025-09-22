@@ -295,75 +295,41 @@ class InternVisionEncoderLayer(nn.Module):
             hidden_states (`Tuple[torch.FloatTensor, Optional[torch.FloatTensor]]`): input to the layer of shape `(batch, seq_len, embed_dim)`
         """
         if sparse_vit_saved is not None:
-            saved = sparse_vit_saved  # 或 sparse_vit_saved
+            # 加上变化量并拼接
+            saved = sparse_vit_saved
             B, L, D = saved["removed_states"].size(0), saved["orig_seq_len"], saved["removed_states"].size(2)
-            device = hidden_states.device  # 或 hidden_states.device
-
-            # 全局 new_kept / orig_kept
-            K = saved["orig_kept_states"].shape[1]
-            flat_new_kept = hidden_states.reshape(B*K, D)  # 或 hidden_states.reshape(B*K, D)
-            flat_orig_kept = saved["orig_kept_states"].reshape(B*K, D)
+            device = hidden_states.device
 
             full_states_patch = []
             for b in range(B):
-                rem_to_kept_idx = saved["rem_to_kept_idx"][b]  # [R, topk]，全局索引
-                removed_indexs_per_batch = saved["removed_indices"][b]
+                # 1) 拿出新旧 kept_states 与 rem_to_kept_idx
+                new_kept        = hidden_states[b]       # [K, D]
+                orig_kept       = saved["orig_kept_states"][b]               # [K, D]
+                rem_to_kept_idx = saved["rem_to_kept_idx"][b]                # [R, 10]
+                removed_indexs_per_batch = saved["removed_indices"][b]                # [R]
                 unique_idx = saved["unique_idx"][b]
                 inv_idx = saved["inv_idx"][b]
 
-                # 计算 delta（全局索引）
-                delta_unique = flat_new_kept[unique_idx] - flat_orig_kept[unique_idx]  # [U, D]
+                # 2) 只对 unique_idx 计算一次 delta
+                delta_unique = (new_kept[unique_idx] - orig_kept[unique_idx])              # [U, D]
 
-                inv_idx = inv_idx.view(rem_to_kept_idx.shape)  # [R, topk]
-                avg_delta_removed = delta_unique[inv_idx].mean(dim=1)  # [R, D]
+                # 3) 把 inv_idx reshape 回 (R, topk)，再 gather 并均值
+                inv_idx = inv_idx.view(rem_to_kept_idx.shape)                              # [R, topk]
+                #print("delta_unique",delta_unique[inv_idx].shape)
+                avg_delta_removed = delta_unique[inv_idx].mean(dim=1)                      # [R, D]
 
-                # 准备 full_states
-                full_states = torch.zeros(L, D, device=device, dtype=flat_new_kept.dtype)
-                # 当前 batch 的 kept 索引还是局部的
-                full_states[saved["keep_indexs"][b]] = hidden_states[b]  # 或 hidden_states[b]
-                full_states[removed_indexs_per_batch] = saved["removed_states"][b] + avg_delta_removed
+                # 4) 准备 full_states 并写回
+                full_states = torch.zeros(L, D, device=device, dtype=new_kept.dtype)
+                #print("fullstates",hidden_states.shape,full_states.shape,saved["keep_indexs"].shape,saved["keep_indexs"])
+                
+                full_states[saved["keep_indexs"][b]] = new_kept                                # fill kept
+                full_states[removed_indexs_per_batch]    = (saved["removed_states"][b] + avg_delta_removed)
 
                 full_states_patch.append(full_states)
+            full_states_patch = torch.stack(full_states_patch,dim=0)
 
-            full_states_patch = torch.stack(full_states_patch, dim=0)
-            hidden_states = full_states_patch  # 或 hidden_states = full_states_patch
-
-
-            # # 加上变化量并拼接
-            # saved = sparse_vit_saved
-            # B, L, D = saved["removed_states"].size(0), saved["orig_seq_len"], saved["removed_states"].size(2)
-            # device = hidden_states.device
-
-            # full_states_patch = []
-            # for b in range(B):
-            #     # 1) 拿出新旧 kept_states 与 rem_to_kept_idx
-            #     new_kept        = hidden_states[b]       # [K, D]
-            #     orig_kept       = saved["orig_kept_states"][b]               # [K, D]
-            #     rem_to_kept_idx = saved["rem_to_kept_idx"][b]                # [R, 10]
-            #     removed_indexs_per_batch = saved["removed_indices"][b]                # [R]
-            #     unique_idx = saved["unique_idx"][b]
-            #     inv_idx = saved["inv_idx"][b]
-
-            #     # 2) 只对 unique_idx 计算一次 delta
-            #     delta_unique = (new_kept[unique_idx] - orig_kept[unique_idx])              # [U, D]
-
-            #     # 3) 把 inv_idx reshape 回 (R, topk)，再 gather 并均值
-            #     inv_idx = inv_idx.view(rem_to_kept_idx.shape)                              # [R, topk]
-            #     #print("delta_unique",delta_unique[inv_idx].shape)
-            #     avg_delta_removed = delta_unique[inv_idx].mean(dim=1)                      # [R, D]
-
-            #     # 4) 准备 full_states 并写回
-            #     full_states = torch.zeros(L, D, device=device, dtype=new_kept.dtype)
-            #     #print("fullstates",hidden_states.shape,full_states.shape,saved["keep_indexs"].shape,saved["keep_indexs"])
-                
-            #     full_states[saved["keep_indexs"][b]] = new_kept                                # fill kept
-            #     full_states[removed_indexs_per_batch]    = (saved["removed_states"][b] + avg_delta_removed)
-
-            #     full_states_patch.append(full_states)
-            # full_states_patch = torch.stack(full_states_patch,dim=0)
-
-            # # 5) 替换并清理
-            # hidden_states = full_states_patch
+            # 5) 替换并清理
+            hidden_states = full_states_patch
 
         attn_outputs = self.attn(self.norm1(hidden_states).to(hidden_states.dtype))
         #print("attn_out",attn_outputs)
@@ -507,7 +473,7 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
                             'attn_scores':None}                 # [batch_size, nheads,seqlen,seqlen] TODO: 优化显存占用
         #frame_counts = torch.zeros(1, device=device)
         hidden_states_prev = None
-        #print("hid state",hidden_states.shape,len(self.layers))
+        #print("hid state",hidden_states.shape)
 
         for idx, blk in enumerate(self.layers):
             if output_hidden_states:
@@ -610,59 +576,32 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
 
 
                         with torch.no_grad():
-                            # 拼成全局 kept token
-                            B, K, D = orig_kept_states.shape
-                            orig_kept_states_all = orig_kept_states.reshape(B*K, D)  # (B*K, D)
-
+                            # p=2.0             ：指定用 L2 范数（Euclidean，p=2）；如果 p=1 则是 L1 距离，p=∞ 则是 Chebyshev 距离，等等
+                            # 输出 dists       ：shape=[R, K]，其中 dists[i,j] 是 removed_states[i] 和 orig_kept_states[j] 的 p‐范数距离
+                            # pairwise distance: [R, K]
+                            #dists = torch.cdist(removed_states, orig_kept_states, p=2.0)
+                            #print(removed_states.shape,orig_kept_states.shape)
                             rem_to_kept_idx_patch = []
                             unique_idx_patch = []
                             inv_idx_patch = []
-
                             for b in range(B):
-                                # 计算 removed_states[b] 到全局 kept token 的距离
                                 dists = torch.cdist(
-                                    removed_states[b].float(),
-                                    orig_kept_states_all.float(),
+                                    removed_states[b].float(), 
+                                    orig_kept_states[b].float(), 
                                     p=2.0
                                 )
-                                # topk 最小距离对应的全局 kept 索引
-                                _, rem_to_kept_idx_global = dists.topk(min(10, orig_kept_states_all.shape[0]), largest=False, dim=1)
+                                # topk 最小距离对应的 kept_states 索引： [R, 10]
+                                _, rem_to_kept_idx = dists.topk(min(10,orig_kept_states[b].shape[0]), largest=False, dim=1)
 
-                                flat_idx = rem_to_kept_idx_global.view(-1)
-                                unique_idx, inv_idx = torch.unique(flat_idx, return_inverse=True)
-
-                                rem_to_kept_idx_patch.append(rem_to_kept_idx_global)
+                                flat_idx = rem_to_kept_idx.view(-1)                                        # [R*topk]
+                                unique_idx, inv_idx = torch.unique(flat_idx, return_inverse=True)          # unique_idx:[U], inv_idx:[R*topk]
+                                
+                                rem_to_kept_idx_patch.append(rem_to_kept_idx)
                                 unique_idx_patch.append(unique_idx)
                                 inv_idx_patch.append(inv_idx)
-
-                            rem_to_kept_idx_patch = torch.stack(rem_to_kept_idx_patch, dim=0)
-                        # with torch.no_grad():
-                        #     # p=2.0             ：指定用 L2 范数（Euclidean，p=2）；如果 p=1 则是 L1 距离，p=∞ 则是 Chebyshev 距离，等等
-                        #     # 输出 dists       ：shape=[R, K]，其中 dists[i,j] 是 removed_states[i] 和 orig_kept_states[j] 的 p‐范数距离
-                        #     # pairwise distance: [R, K]
-                        #     #dists = torch.cdist(removed_states, orig_kept_states, p=2.0)
-                        #     #print(removed_states.shape,orig_kept_states.shape)
-                        #     rem_to_kept_idx_patch = []
-                        #     unique_idx_patch = []
-                        #     inv_idx_patch = []
-                        #     for b in range(B):
-                        #         dists = torch.cdist(
-                        #             removed_states[b].float(), 
-                        #             orig_kept_states[b].float(), 
-                        #             p=2.0
-                        #         )
-                        #         # topk 最小距离对应的 kept_states 索引： [R, 10]
-                        #         _, rem_to_kept_idx = dists.topk(min(10,orig_kept_states[b].shape[0]), largest=False, dim=1)
-
-                        #         flat_idx = rem_to_kept_idx.view(-1)                                        # [R*topk]
-                        #         unique_idx, inv_idx = torch.unique(flat_idx, return_inverse=True)          # unique_idx:[U], inv_idx:[R*topk]
-                                
-                        #         rem_to_kept_idx_patch.append(rem_to_kept_idx)
-                        #         unique_idx_patch.append(unique_idx)
-                        #         inv_idx_patch.append(inv_idx)
-                        #     rem_to_kept_idx_patch = torch.stack(rem_to_kept_idx_patch,dim=0)
-                        #     #unique_idx_patch = torch.stack(unique_idx_patch,dim=0)
-                        #     #inv_idx_patch = torch.stack(inv_idx_patch,dim=0)
+                            rem_to_kept_idx_patch = torch.stack(rem_to_kept_idx_patch,dim=0)
+                            #unique_idx_patch = torch.stack(unique_idx_patch,dim=0)
+                            #inv_idx_patch = torch.stack(inv_idx_patch,dim=0)
 
 
                         hidden_states_pkg['hidden_states'] = orig_kept_states
@@ -679,8 +618,6 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
                             "removed_states": removed_states,
                             "orig_kept_states": orig_kept_states,
 
-                            "orig_kept_states_flat": orig_kept_states.reshape(-1, D),
-
                             # 新增这行，R×10 的 LongTensor
                             "rem_to_kept_idx":    rem_to_kept_idx_patch,  
                             "unique_idx": unique_idx_patch,
@@ -692,74 +629,39 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
                 else:
                     hidden_states_pkg = blk(hidden_states)
 
-
                 if idx == self.config.num_hidden_layers - 1 and hasattr(self, "_sparse_vit_saved"):
-                    saved = self._sparse_vit_saved  # 或 sparse_vit_saved
+                    saved = self._sparse_vit_saved
                     B, L, D = saved["removed_states"].size(0), saved["orig_seq_len"], saved["removed_states"].size(2)
-                    device = hidden_states_pkg['hidden_states'].device  # 或 hidden_states.device
-
-                    # 全局 new_kept / orig_kept
-                    K = saved["orig_kept_states"].shape[1]
-                    flat_new_kept = hidden_states_pkg['hidden_states'].reshape(B*K, D)  # 或 hidden_states.reshape(B*K, D)
-                    flat_orig_kept = saved["orig_kept_states"].reshape(B*K, D)
-
+                    device = hidden_states_pkg['hidden_states'].device
+                    
                     full_states_patch = []
                     for b in range(B):
-                        rem_to_kept_idx = saved["rem_to_kept_idx"][b]  # [R, topk]，全局索引
-                        removed_indexs_per_batch = saved["removed_indices"][b]
+                        # 1) 拿出新旧 kept_states 与 rem_to_kept_idx
+                        new_kept        = hidden_states_pkg['hidden_states'][b]       # [K, D]
+                        orig_kept       = saved["orig_kept_states"][b]               # [K, D]
+                        rem_to_kept_idx = saved["rem_to_kept_idx"][b]                # [R, 10]
+                        removed_indexs_per_batch = saved["removed_indices"][b]                # [R]
                         unique_idx = saved["unique_idx"][b]
                         inv_idx = saved["inv_idx"][b]
 
-                        # 计算 delta（全局索引）
-                        delta_unique = flat_new_kept[unique_idx] - flat_orig_kept[unique_idx]  # [U, D]
+                        # 2) 只对 unique_idx 计算一次 delta
+                        delta_unique = (new_kept[unique_idx] - orig_kept[unique_idx])              # [U, D]
 
-                        inv_idx = inv_idx.view(rem_to_kept_idx.shape)  # [R, topk]
-                        avg_delta_removed = delta_unique[inv_idx].mean(dim=1)  # [R, D]
+                        # 3) 把 inv_idx reshape 回 (R, topk)，再 gather 并均值
+                        inv_idx = inv_idx.view(rem_to_kept_idx.shape)                              # [R, topk]
+                        #print("delta_unique",delta_unique[inv_idx].shape)
+                        avg_delta_removed = delta_unique[inv_idx].mean(dim=1)                      # [R, D]
 
-                        # 准备 full_states
-                        full_states = torch.zeros(L, D, device=device, dtype=flat_new_kept.dtype)
-                        # 当前 batch 的 kept 索引还是局部的
-                        full_states[saved["keep_indexs"][b]] = hidden_states_pkg['hidden_states'][b]  # 或 hidden_states[b]
-                        full_states[removed_indexs_per_batch] = saved["removed_states"][b] + avg_delta_removed
+                        # 4) 准备 full_states 并写回
+                        full_states = torch.zeros(L, D, device=device, dtype=new_kept.dtype)
+                        full_states[saved["keep_indexs"][b]] = new_kept                                # fill kept
+                        full_states[removed_indexs_per_batch]    = (saved["removed_states"][b] + avg_delta_removed)
 
                         full_states_patch.append(full_states)
+                    full_states_patch = torch.stack(full_states_patch,dim=0)
 
-                    full_states_patch = torch.stack(full_states_patch, dim=0)
-                    hidden_states_pkg['hidden_states'] = full_states_patch  # 或 hidden_states = full_states_patch
-
-                    # saved = self._sparse_vit_saved
-                    # B, L, D = saved["removed_states"].size(0), saved["orig_seq_len"], saved["removed_states"].size(2)
-                    # device = hidden_states_pkg['hidden_states'].device
-                    
-                    # full_states_patch = []
-                    # for b in range(B):
-                    #     # 1) 拿出新旧 kept_states 与 rem_to_kept_idx
-                    #     new_kept        = hidden_states_pkg['hidden_states'][b]       # [K, D]
-                    #     orig_kept       = saved["orig_kept_states"][b]               # [K, D]
-                    #     rem_to_kept_idx = saved["rem_to_kept_idx"][b]                # [R, 10]
-                    #     removed_indexs_per_batch = saved["removed_indices"][b]                # [R]
-                    #     unique_idx = saved["unique_idx"][b]
-                    #     inv_idx = saved["inv_idx"][b]
-
-                    #     # 2) 只对 unique_idx 计算一次 delta
-                    #     delta_unique = (new_kept[unique_idx] - orig_kept[unique_idx])              # [U, D]
-
-                    #     # 3) 把 inv_idx reshape 回 (R, topk)，再 gather 并均值
-                    #     inv_idx = inv_idx.view(rem_to_kept_idx.shape)                              # [R, topk]
-                    #     #print("delta_unique",delta_unique[inv_idx].shape)
-                    #     avg_delta_removed = delta_unique[inv_idx].mean(dim=1)                      # [R, D]
-
-                    #     # 4) 准备 full_states 并写回
-                    #     full_states = torch.zeros(L, D, device=device, dtype=new_kept.dtype)
-                    #     full_states[saved["keep_indexs"][b]] = new_kept                                # fill kept
-                    #     full_states[removed_indexs_per_batch]    = (saved["removed_states"][b] + avg_delta_removed)
-
-                    #     full_states_patch.append(full_states)
-                    # full_states_patch = torch.stack(full_states_patch,dim=0)
-
-                    # # 5) 替换并清理
-                    # hidden_states_pkg['hidden_states'] = full_states_patch
-
+                    # 5) 替换并清理
+                    hidden_states_pkg['hidden_states'] = full_states_patch
                     del self._sparse_vit_saved
 
                 hidden_states = hidden_states_pkg['hidden_states']

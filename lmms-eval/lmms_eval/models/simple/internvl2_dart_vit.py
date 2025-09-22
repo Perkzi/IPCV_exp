@@ -422,6 +422,12 @@ class InternVL2_DART_ViT(lmms):
         res = []
         pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
 
+        # ---------------compute time-------------
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        total_infer_time = 0.0
+        # ---------------compute time-------------
+
         for contexts, gen_kwargs, doc_to_visual, doc_id, task, split in [reg.args for reg in requests]:
             if "until" in gen_kwargs:
                 gen_kwargs.pop("until")
@@ -439,6 +445,11 @@ class InternVL2_DART_ViT(lmms):
 
             visuals = [doc_to_visual(self.task_dict[task][split][doc_id])]
             visuals = self.flatten(visuals)
+
+            # ---------------compute time-------------
+            torch.cuda.synchronize()  
+            start_event.record()
+            # ---------------compute time-------------
             if self.modality == "image":
                 if visuals:
                     visuals = [load_image(visual).to(torch.bfloat16).cuda() for visual in visuals]
@@ -460,10 +471,22 @@ class InternVL2_DART_ViT(lmms):
                 question = video_prefix + contexts
                 response, history = self.model.chat(self.tokenizer, pixel_values, question, gen_kwargs, num_patches_list=num_patches_list, history=None, return_history=True)
             
-            
+            # ---------------compute time-------------
+            end_event.record()
+            torch.cuda.synchronize()  # 等待 generate 完成
+            total_infer_time += start_event.elapsed_time(end_event)  # 毫秒
+            # ---------------compute time-------------
             
             res.append(response)
             pbar.update(1)
+
+        if self.rank == 0:  # 多卡时只在主进程打印
+            # total_infer_time 单位是毫秒
+            total_seconds = total_infer_time / 1000
+            minutes = int(total_seconds // 60)
+            seconds = total_seconds % 60
+
+            print(f"Total pure GPU inference time: {minutes} min {seconds:.2f} sec")
         pbar.close()
         return res
 

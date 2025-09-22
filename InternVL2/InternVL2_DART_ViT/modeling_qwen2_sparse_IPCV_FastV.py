@@ -169,6 +169,9 @@ class Qwen2Attention(nn.Module):
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
+        # 2. FlashAttention  reset position id
+        fa_position_ids = torch.arange(kwargs.get("position_ids").shape[1], device=query_states.device).unsqueeze(0).expand(kwargs.get("position_ids").shape[0], -1)
+        kwargs["position_ids"] = fa_position_ids
         attn_output, attn_weights = attention_interface(
             self,
             query_states,
