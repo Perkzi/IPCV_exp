@@ -454,7 +454,7 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
                         last_layer_state = hidden_states_pkg['hidden_states'].detach().clone()  # (B, N, C)
                         k_states = hidden_states_pkg['k_states']   # (B, heads, N, C) 或类似
                         attn_scores = hidden_states_pkg['attn_scores']  # (B, heads, N, N) 或类似
-                        #print("k_states",k_states.shape)
+                        #print("attn",attn_scores.shape,k_states.shape)
 
                         B = last_layer_state.shape[0]
                         keep_indexs_per_batch = []
@@ -464,14 +464,14 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
                                 keep_idx = self.get_retained_image_token_attn_scores(
                                     self.config,
                                     last_layer_state[b,1:],  # 单样本
-                                    k_states[b,1:],
-                                    attn_scores[b,1:]
+                                    k_states[b,:,1:],
+                                    attn_scores[b, :, 1:, 1:]
                                 ).to(device)
                             elif DART_config['vit_random_choose']:
                                 keep_idx = self.get_retained_image_token_random(
                                     self.config,
                                     last_layer_state[b,1:],
-                                    k_states[b,1:]
+                                    k_states[b,:,1:]
                                 ).to(device)
                             elif DART_config['vit_diff_choose']:
                                 keep_idx = self.get_retained_image_token_diff(
@@ -484,13 +484,13 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
                                 keep_idx = self.get_retained_image_token_pivot_sim(
                                     self.config,
                                     last_layer_state[b,1:],
-                                    k_states[b,1:]
+                                    k_states[b,:,1:]
                                 )
                             else:
                                 keep_idx = self.get_retained_image_token(
                                     self.config,
                                     last_layer_state[b,1:],
-                                    k_states[b,1:]
+                                    k_states[b,:,1:]
                                 ).to(device)
 
                             keep_idx = keep_idx.sort().values
@@ -503,12 +503,14 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
                                 torch.tensor([0], device=keep_idx.device, dtype=keep_idx.dtype),
                                 keep_idx
                             ])
+                            #print("keep_idx",keep_idx.shape,keep_idx)
                            
                             keep_indexs_per_batch.append(keep_idx)
 
                         # 保存原始长度
                         orig_seq_len = seq_len
                         orig_states = hidden_states_pkg['hidden_states'].detach().clone()
+                        #print("orig state",orig_states.shape)
 
                         # 对每个样本单独裁剪
                         pruned_states = []
@@ -673,7 +675,7 @@ class InternVisionEncoder_Sparse(InternVisionEncoder):
 
         device = last_layer_state.device
 
-        any_states = any_states.reshape(any_states.shape[0], -1) # [seq_len, embed_dim]
+        any_states = any_states.reshape(any_states.shape[1], -1) # [seq_len, embed_dim]
 
         k_states_image_token = any_states[image_token_start_index:image_token_start_index + image_token_length, :] # [valid_seq_len, hidden_dim]
         #k_states_query_token = any_states[image_token_start_index + image_token_length:, :]

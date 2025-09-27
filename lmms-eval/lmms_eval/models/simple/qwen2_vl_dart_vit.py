@@ -389,6 +389,16 @@ class Qwen2_VL_DART_ViT(lmms):
                 max_new_tokens=gen_kwargs["max_new_tokens"],
                 use_cache=self.use_cache,
             )
+
+            # ---------------test prefilling only-------------------
+            # cont  = self.model(
+            #     **inputs,
+            #     use_cache=True   # 这样会返回 KV cache，符合真实推理场景
+            # )
+            # # 取 logits 转成 token ids（比如 argmax）
+            # cont = torch.argmax(cont.logits, dim=-1)
+            # ---------------test prefilling only end-------------------
+
             
             # ---------------compute time-------------
             end_event.record()
