@@ -55,10 +55,10 @@ class Qwen2_VL_DART_ViT(lmms):
         use_flash_attention_2: Optional[bool] = False,
         # max_pixels: int = 12845056,
         # min_pixels: int = 3136,
-        # max_pixels: int = 602112,
-        # min_pixels: int = 3136,
-        max_pixels: int = 16384*28*28,
-        min_pixels: int = 1280*28*28,
+        # max_pixels: int = 602112, # video setting
+        # min_pixels: int = 3136, # video setting
+        max_pixels: int = 16384*28*28, # default setting
+        min_pixels: int = 1280*28*28, # default setting
         max_num_frames: int = 32,
 
         attn_implementation="flash_attention_2",
@@ -259,6 +259,8 @@ class Qwen2_VL_DART_ViT(lmms):
         end_event = torch.cuda.Event(enable_timing=True)
         total_infer_time = 0.0
         # ---------------compute time-------------
+        sample_num=0
+
         for chunk in chunks:
             contexts, all_gen_kwargs, doc_to_visual, doc_id, task, split = zip(*chunk)
             task = task[0]
@@ -378,6 +380,26 @@ class Qwen2_VL_DART_ViT(lmms):
             torch.cuda.synchronize()  
             start_event.record()
             # ---------------compute time-------------
+            # cont = self.model.generate(
+            #     **inputs,
+            #     eos_token_id=self.tokenizer.eos_token_id,
+            #     pad_token_id=pad_token_id,
+            #     do_sample=True if gen_kwargs["temperature"] > 0 else False,
+            #     temperature=gen_kwargs["temperature"],
+            #     top_p=gen_kwargs["top_p"],
+            #     num_beams=gen_kwargs["num_beams"],
+            #     max_new_tokens=gen_kwargs["max_new_tokens"],
+            #     use_cache=self.use_cache,
+            # )
+
+            # ---------------test prefilling only-------------------
+            # cont  = self.model(
+            #     **inputs,
+            #     use_cache=self.use_cache   # 这样会返回 KV cache，符合真实推理场景
+            # )
+            # # 取 logits 转成 token ids（比如 argmax）
+            # cont = torch.argmax(cont.logits, dim=-1)
+            # -------v2------
             cont = self.model.generate(
                 **inputs,
                 eos_token_id=self.tokenizer.eos_token_id,
@@ -386,17 +408,9 @@ class Qwen2_VL_DART_ViT(lmms):
                 temperature=gen_kwargs["temperature"],
                 top_p=gen_kwargs["top_p"],
                 num_beams=gen_kwargs["num_beams"],
-                max_new_tokens=gen_kwargs["max_new_tokens"],
+                max_new_tokens=1,              #  固定为 1
                 use_cache=self.use_cache,
             )
-
-            # ---------------test prefilling only-------------------
-            # cont  = self.model(
-            #     **inputs,
-            #     use_cache=True   # 这样会返回 KV cache，符合真实推理场景
-            # )
-            # # 取 logits 转成 token ids（比如 argmax）
-            # cont = torch.argmax(cont.logits, dim=-1)
             # ---------------test prefilling only end-------------------
 
             
@@ -404,6 +418,14 @@ class Qwen2_VL_DART_ViT(lmms):
             end_event.record()
             torch.cuda.synchronize()  # 等待 generate 完成
             total_infer_time += start_event.elapsed_time(end_event)  # 毫秒
+
+            sample_num+=1
+            if sample_num in [600,1200,2400]:
+                total_seconds = total_infer_time / 1000
+                minutes = int(total_seconds // 60)
+                seconds = total_seconds % 60
+
+                print(f"Total pure GPU inference time: {minutes} min {seconds:.2f} sec")
             # ---------------compute time-------------
 
 

@@ -450,6 +450,15 @@ class InternVL2_DART_ViT(lmms):
             torch.cuda.synchronize()  
             start_event.record()
             # ---------------compute time-------------
+
+            #------------prefilling only----------------
+            # gen_kwargs.update({
+            #     "max_new_tokens": 1,
+            #     "do_sample": False,
+            #     "top_p": 1.0,
+            # })
+            #------------prefilling only end----------------
+
             if self.modality == "image":
                 if visuals:
                     visuals = [load_image(visual).to(torch.bfloat16).cuda() for visual in visuals]

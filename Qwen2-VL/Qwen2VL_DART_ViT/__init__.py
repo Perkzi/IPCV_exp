@@ -15,11 +15,13 @@
 
 #from .modeling_qwen2_vl_IPCV import Qwen2VLForConditionalGeneration
 
-from .modeling_qwen2_vl_IPCV_FastV import Qwen2VLForConditionalGeneration
+#from .modeling_qwen2_vl_IPCV_FastV import Qwen2VLForConditionalGeneration
 
-# from .modeling_qwen2_vl_IPCV_V2Drop import Qwen2VLForConditionalGeneration
+#from .modeling_qwen2_vl_IPCV_V2Drop import Qwen2VLForConditionalGeneration
 
 #from .modeling_qwen2_vl_IPCV_SparseVLM import Qwen2VLForConditionalGeneration
+
+#from .modeling_qwen2_vl_IPCV_no_integration import Qwen2VLForConditionalGeneration
 
 #from .modeling_qwen2_vl_ToMe import Qwen2VLForConditionalGeneration
 
@@ -27,7 +29,7 @@ from .modeling_qwen2_vl_IPCV_FastV import Qwen2VLForConditionalGeneration
 
 #from .modeling_qwen2_vl_FastV import Qwen2VLForConditionalGeneration
 
-#from .modeling_qwen2_vl_SparseVLM import Qwen2VLForConditionalGeneration
+from .modeling_qwen2_vl_SparseVLM import Qwen2VLForConditionalGeneration
 
 #from .modeling_qwen2_vl_Token_fusion import Qwen2VLForConditionalGeneration
 

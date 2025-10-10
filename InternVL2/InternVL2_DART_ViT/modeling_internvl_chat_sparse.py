@@ -27,6 +27,7 @@ from .modeling_intern_vit_sparse import InternVisionModel_Sparse, has_flash_attn
 
 
 from .modeling_qwen2_sparse import Qwen2ForCausalLM_Sparse
+import time
 
 logger = logging.get_logger(__name__)
 
@@ -95,6 +96,11 @@ class InternVLChatModel(PreTrainedModel):
         self.conv_template = get_conv_template(self.template)
         self.system_message = self.conv_template.system_message
 
+
+        self.time_cost_vit = 0
+        self.time_cost_proj = 0
+        self.time_cost_llm = 0
+
     def forward(
             self,
             pixel_values: torch.FloatTensor,
@@ -114,10 +120,14 @@ class InternVLChatModel(PreTrainedModel):
         image_flags = image_flags.squeeze(-1)
         input_embeds = self.language_model.get_input_embeddings()(input_ids).clone()
 
+        
+
         #print("pixel_values",pixel_values.shape)
         vit_embeds = self.extract_feature(pixel_values)
         vit_embeds = vit_embeds[image_flags == 1]
         vit_batch_size = pixel_values.shape[0]
+
+        
 
         B, N, C = input_embeds.shape
         input_embeds = input_embeds.reshape(B * N, C)
@@ -139,6 +149,7 @@ class InternVLChatModel(PreTrainedModel):
 
         input_embeds = input_embeds.reshape(B, N, C)
 
+        
         outputs = self.language_model(
             inputs_embeds=input_embeds,
             attention_mask=attention_mask,
@@ -150,6 +161,8 @@ class InternVLChatModel(PreTrainedModel):
             return_dict=return_dict,
         )
         logits = outputs.logits
+
+        
 
         loss = None
         if labels is not None:
@@ -193,6 +206,8 @@ class InternVLChatModel(PreTrainedModel):
         return x
 
     def extract_feature(self, pixel_values):
+        time_vit_start = time.time()
+        
         if self.select_layer == -1:
             vit_embeds = self.vision_model(
                 pixel_values=pixel_values,
@@ -203,6 +218,12 @@ class InternVLChatModel(PreTrainedModel):
                 pixel_values=pixel_values,
                 output_hidden_states=True,
                 return_dict=True).hidden_states[self.select_layer]
+            
+        time_vit_end = time.time()
+        self.time_cost_vit += time_vit_end - time_vit_start
+
+
+        time_proj_start = time.time()
         
         vit_embeds = vit_embeds[:, 1:, :]
 
@@ -211,6 +232,9 @@ class InternVLChatModel(PreTrainedModel):
         vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.downsample_ratio)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
         vit_embeds = self.mlp1(vit_embeds)
+
+        time_proj_end = time.time()
+        self.time_cost_proj += time_proj_end - time_proj_start
         return vit_embeds
 
     def batch_chat(self, tokenizer, pixel_values, questions, generation_config, num_patches_list=None,
@@ -353,6 +377,7 @@ class InternVLChatModel(PreTrainedModel):
 
         assert self.img_context_token_id is not None
         if pixel_values is not None:
+            
             #print("pixel",pixel_values.shape)
             if visual_features is not None:
                 vit_embeds = visual_features
@@ -402,10 +427,13 @@ class InternVLChatModel(PreTrainedModel):
             #print("input embed",input_embeds.shape)
 
             input_embeds = input_embeds.reshape(B, -1, C)
+
+            
         else:
             input_embeds = self.language_model.get_input_embeddings()(input_ids)
 
         
+        time_llm_start = time.time()
 
         outputs = self.language_model.generate(
             inputs_embeds=input_embeds,
@@ -415,6 +443,16 @@ class InternVLChatModel(PreTrainedModel):
             use_cache=True,
             **generate_kwargs,
         )
+        #print("generate kwargs",generate_kwargs,"outputs",outputs.shape)
+
+        # new_tokens = outputs.shape[1] - input_embeds.shape[1]
+        # print("新生成 token 数:", new_tokens)
+
+
+        time_llm_end = time.time()
+        self.time_cost_llm += time_llm_end - time_llm_start
+        
+        # print("time_cost_vit", self.time_cost_vit,"time_cost_llm", self.time_cost_llm, "time_cost_proj", self.time_cost_proj)
 
         return outputs
 
