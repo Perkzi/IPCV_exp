@@ -2057,9 +2057,12 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             #print("CUDA memory before creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             inputs_embeds = self.model.embed_tokens(input_ids) # [batch_size, seq_len, hidden_size]
             #print("CUDA memory after creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
+
+            # time_vit_start = time.time()
+
             if pixel_values is not None:
                 #print("pixelvalue", pixel_values.shape)
-                # time_vit_start = time.time()
+                
                 # num_tokens_prev = input_ids.shape[1]
                 pixel_values = pixel_values.type(self.visual.get_dtype())
                 
@@ -2097,9 +2100,6 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                     # 把 image_embeds填入这些 <image> token 的 embedding 位置：
                     inputs_embeds[image_mask] = image_embeds
 
-                # time_vit_end = time.time()
-                # self.time_cost_vit += time_vit_end - time_vit_start
-                
                     
                 
             if pixel_values_videos is not None:
@@ -2127,6 +2127,8 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                     video_mask = input_ids == self.config.video_token_id
                     inputs_embeds[video_mask] = video_embeds
                     
+            # time_vit_end = time.time()
+            # self.time_cost_vit += time_vit_end - time_vit_start
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)

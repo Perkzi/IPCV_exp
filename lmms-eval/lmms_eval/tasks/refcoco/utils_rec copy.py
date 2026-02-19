@@ -63,8 +63,7 @@ def parse_float_sequence_within(input_str):
     Returns:
     list: A list of four floats if the pattern is found, or a list of four zeros if the pattern is not found.
     """
-    # TODO: add more patterns to support various formats
-    # pattern1 [num, num, num, num]
+    # Define the regex pattern to find the first instance of four floats within square brackets
     pattern = r"\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]"
 
     # Use re.search to find the first match of the pattern in the input string
@@ -73,33 +72,10 @@ def parse_float_sequence_within(input_str):
     # If a match is found, convert the captured groups into a list of floats
     if match:
         return [float(match.group(i)) for i in range(1, 5)]
-    # pattern2 (num, num, num, num)
-    pattern = r"\(\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\)"
-    match = re.search(pattern, input_str)
-    if match:
-        return [float(match.group(i)) for i in range(1, 5)]
-    # pattern3 (num, num), (num, num)
-    pattern = r"\(\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\),\s*\(\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)"
-    match = re.search(pattern, input_str)
-    if match:
-        return [float(match.group(i)) for i in range(1, 5)]
+
     # If the input does not contain the pattern, return the null float sequence
     return [0, 0, 0, 0]
 
-
-# def refcoco_bbox_rec_process_result(doc, result):
-#     """
-#     Args:
-#         doc: a instance of the eval dataset
-#         results: [pred]
-#     Returns:
-#         a dictionary with key: metric name, value: metric value
-#     """
-#     pred = result[0] if len(result) > 0 else ""
-#     pred = parse_float_sequence_within(pred)
-#     ann_id = doc["question_id"]
-#     data_dict = {"answer": doc["answer"], "pred": pred, "ann_id": ann_id, "bbox": doc["bbox"]}
-#     return {f"refcoco_{metric}": data_dict for metric in COCO_REC_METRICS}
 
 def refcoco_bbox_rec_process_result(doc, result):
     """
@@ -110,27 +86,9 @@ def refcoco_bbox_rec_process_result(doc, result):
         a dictionary with key: metric name, value: metric value
     """
     pred = result[0] if len(result) > 0 else ""
-    is_qwen2vl = False
-    if "<|box_start|>" in pred:
-        is_qwen2vl = True
     pred = parse_float_sequence_within(pred)
-    if is_qwen2vl is True:
-        pred = [num / 1000 for num in pred]
-    else:
-        if any([x < 0 - 1e-5 or x > 1 + 1e-5 for x in pred]):
-            pred = [
-                x / doc["image_width"]
-                if i % 2 == 0
-                else x / doc["image_height"]
-                for i, x in enumerate(pred)
-            ]
     ann_id = doc["question_id"]
-    data_dict = {
-        "answer": doc["answer"],
-        "pred": pred,
-        "ann_id": ann_id,
-        "bbox": doc["bbox"],
-    }
+    data_dict = {"answer": doc["answer"], "pred": pred, "ann_id": ann_id, "bbox": doc["bbox"]}
     return {f"refcoco_{metric}": data_dict for metric in COCO_REC_METRICS}
 
 

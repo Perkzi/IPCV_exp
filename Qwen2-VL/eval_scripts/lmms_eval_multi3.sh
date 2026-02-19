@@ -8,11 +8,11 @@
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
 #export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
-tasks=( "mmbench_en")
+tasks=( "refcoco_bbox_rec_testB")
 pruned_layers=(3)
-reduction_ratios=(0.936)
+reduction_ratios=(0.175)
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.95)
+vit_reduction_ratios=(0.175)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -37,8 +37,8 @@ for task in "${tasks[@]}"; do
           #output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           mkdir -p "$output_path"
 
-          Sparse=True
-          vit_Sparse=False
+          Sparse=False
+          vit_Sparse=True
           image_token_start_index=0
           image_token_length=0
           max_num_trunction=128
@@ -52,11 +52,11 @@ for task in "${tasks[@]}"; do
 
           vit_random_choose=False
           vit_attn_scores_choose=False
-          vit_diff_choose=False
+          vit_diff_choose=True
           vit_pivot_sim_choose=False
 
           torch_dtype=float16
-          GPU=1
+          GPU=7
 
 
           CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \

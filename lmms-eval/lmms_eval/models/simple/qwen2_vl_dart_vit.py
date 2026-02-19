@@ -55,8 +55,8 @@ class Qwen2_VL_DART_ViT(lmms):
         use_flash_attention_2: Optional[bool] = False,
         # max_pixels: int = 12845056,
         # min_pixels: int = 3136,
-        # max_pixels: int = 602112, # video setting
-        # min_pixels: int = 3136, # video setting
+        #max_pixels: int = 602112, # video setting
+        #min_pixels: int = 3136, # video setting
         max_pixels: int = 16384*28*28, # default setting
         min_pixels: int = 1280*28*28, # default setting
         max_num_frames: int = 32,
@@ -240,6 +240,13 @@ class Qwen2_VL_DART_ViT(lmms):
             return -len(toks), x[0]
         
 
+        # import torch
+
+        # model = self._model  # 已经加载好的模型
+        # num_params = sum(p.numel() for p in model.parameters())
+        # print(f"Total parameters: {num_params/1e6:.2f}M")
+
+
         # ---------------compute kv1-----------------------------
         compute_flops_kv = True
         if compute_flops_kv:
@@ -380,17 +387,17 @@ class Qwen2_VL_DART_ViT(lmms):
             torch.cuda.synchronize()  
             start_event.record()
             # ---------------compute time-------------
-            # cont = self.model.generate(
-            #     **inputs,
-            #     eos_token_id=self.tokenizer.eos_token_id,
-            #     pad_token_id=pad_token_id,
-            #     do_sample=True if gen_kwargs["temperature"] > 0 else False,
-            #     temperature=gen_kwargs["temperature"],
-            #     top_p=gen_kwargs["top_p"],
-            #     num_beams=gen_kwargs["num_beams"],
-            #     max_new_tokens=gen_kwargs["max_new_tokens"],
-            #     use_cache=self.use_cache,
-            # )
+            cont = self.model.generate(
+                **inputs,
+                eos_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=pad_token_id,
+                do_sample=True if gen_kwargs["temperature"] > 0 else False,
+                temperature=gen_kwargs["temperature"],
+                top_p=gen_kwargs["top_p"],
+                num_beams=gen_kwargs["num_beams"],
+                max_new_tokens=gen_kwargs["max_new_tokens"],
+                use_cache=self.use_cache,
+            )
 
             # ---------------test prefilling only-------------------
             # cont  = self.model(
@@ -400,17 +407,17 @@ class Qwen2_VL_DART_ViT(lmms):
             # # 取 logits 转成 token ids（比如 argmax）
             # cont = torch.argmax(cont.logits, dim=-1)
             # -------v2------
-            cont = self.model.generate(
-                **inputs,
-                eos_token_id=self.tokenizer.eos_token_id,
-                pad_token_id=pad_token_id,
-                do_sample=True if gen_kwargs["temperature"] > 0 else False,
-                temperature=gen_kwargs["temperature"],
-                top_p=gen_kwargs["top_p"],
-                num_beams=gen_kwargs["num_beams"],
-                max_new_tokens=1,              #  固定为 1
-                use_cache=self.use_cache,
-            )
+            # cont = self.model.generate(
+            #     **inputs,
+            #     eos_token_id=self.tokenizer.eos_token_id,
+            #     pad_token_id=pad_token_id,
+            #     do_sample=True if gen_kwargs["temperature"] > 0 else False,
+            #     temperature=gen_kwargs["temperature"],
+            #     top_p=gen_kwargs["top_p"],
+            #     num_beams=gen_kwargs["num_beams"],
+            #     max_new_tokens=1,              #  固定为 1
+            #     use_cache=self.use_cache,
+            # )
             # ---------------test prefilling only end-------------------
 
             
@@ -431,6 +438,11 @@ class Qwen2_VL_DART_ViT(lmms):
 
             generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
             answers = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            # refcoco only
+            #answers = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+            
+            
+            
             #print(f"answers: {answers}")
 
             ## cuda memory free

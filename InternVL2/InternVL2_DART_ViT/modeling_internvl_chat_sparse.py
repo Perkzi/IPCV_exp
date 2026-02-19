@@ -452,7 +452,7 @@ class InternVLChatModel(PreTrainedModel):
         time_llm_end = time.time()
         self.time_cost_llm += time_llm_end - time_llm_start
         
-        # print("time_cost_vit", self.time_cost_vit,"time_cost_llm", self.time_cost_llm, "time_cost_proj", self.time_cost_proj)
+        print("time_cost_vit", self.time_cost_vit,"time_cost_llm", self.time_cost_llm, "time_cost_proj", self.time_cost_proj)
 
         return outputs
 
