@@ -1833,8 +1833,12 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
         self.post_init()
 
 
-        self.time_cost_vit = 0
-        self.time_cost_llm = 0
+        self.vit_time = 0
+        self.post_vit_time = 0
+        self.projector_time = 0
+        self.llm_time = 0
+        self.update_id_time = 0
+        
 
     def get_input_embeddings(self):
         return self.model.embed_tokens
@@ -2100,11 +2104,23 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 #print("dartconfig",self.config.DART_config)
                 if self.config.DART_config is not None and self.config.DART_config['vit_Sparse']:
                     # vision数量变化
+                    #time_vit_start = time.time()
+
                     image_embeds, retained_nums = self.visual(pixel_values, grid_thw=image_grid_thw) # [seq_len, hidden_size] seq_len为(image tokens)//spatial_merge_size**2
+
+                    # time_vit_end = time.time()
+                    # self.vit_time += time_vit_end - time_vit_start
+                    
+
+                    # time_post_vit_start = time.time()
                     
                     image_embeds.to(inputs_embeds.device)
 
                     input_ids_new, retained_indices = _update_ids(input_ids, self.config.image_token_id, retained_nums)
+
+                    # time_update_ids = time.time()
+                    # self.update_id_time += time_update_ids-time_post_vit_start
+
                     # image_mask = input_ids == self.config.image_token_id # [batch_size, seq_len]
                     image_mask = input_ids_new == self.config.image_token_id
                     inputs_embeds = inputs_embeds[:,retained_indices,:]
@@ -2117,6 +2133,10 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                     attention_mask = attention_mask[:,retained_indices]
                     # num_tokens_new = input_ids_new.shape[1]
                     #print("num_tokens_prev: ", num_tokens_prev," ---> ","num_tokens_new: ", num_tokens_new,"\n")
+
+                    # time_post_vit_end = time.time()
+                    # self.post_vit_time += time_post_vit_end - time_post_vit_start
+                    # print("time_cost_vit", self.vit_time,self.update_id_time,self.post_vit_time)
                 else:
                 
                     # vision数量不变
@@ -2166,6 +2186,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                 attention_mask = attention_mask.to(inputs_embeds.device)
 
         # time_llm_start = time.time()
+
         outputs = self.model(
             input_ids=None,
             position_ids=position_ids,
@@ -2177,9 +2198,10 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             output_hidden_states=output_hidden_states, # bool
             return_dict=return_dict, # bool
         )
+
         # time_llm_end = time.time()
-        # self.time_cost_llm += time_llm_end - time_llm_start
-        # print("time_cost_vit", self.time_cost_vit,"time_cost_llm", self.time_cost_llm)
+        # self.llm_time += time_llm_end - time_llm_start
+        # print("time_cost", self.vit_time,self.post_vit_time,self.llm_time)
 
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
@@ -2472,7 +2494,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         # ------------------------END------------------------------------------
             #print("layer",blk.layer_idx)
             #print(hasattr(self, "_sparse_vit_saved"),)
-            if hasattr(self, "_sparse_vit_saved") and blk.layer_idx < DART_config['vit_pruned_layer']+7:
+            if hasattr(self, "_sparse_vit_saved") and blk.layer_idx < DART_config['vit_pruned_layer']+0:
                 #print(hidden_states_pkg['hidden_states'].shape, cu_seqlens_pruned, rotary_pos_emb_pruned.shape)
                 #hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens_pruned, rotary_pos_emb=rotary_pos_emb_pruned, sparse_vit_saved=sparse_vit_saved)
                 hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb, sparse_vit_saved=self._sparse_vit_saved)
@@ -2798,50 +2820,70 @@ class Qwen2RMSNorm_no_param(nn.Module):
 #     return new_input_ids, indices
 
 
-def _update_ids(input_ids, image_token_id, retained_nums):
-    # 确保 batch_size=1
-    assert input_ids.size(0) == 1, "Batch size must be 1"
+# def _update_ids_v1(input_ids, image_token_id, retained_nums):
+#     # 确保 batch_size=1
+#     assert input_ids.size(0) == 1, "Batch size must be 1"
     
+#     seq = input_ids[0]  # [seq_len]
+#     new_tokens = []
+#     indices = []
+
+#     # retained_nums 直接求和成一个总数
+#     total_retain = int(
+#         torch.tensor(retained_nums, device=input_ids.device).sum().item()
+#     )
+
+#     i = 0
+#     while i < len(seq):
+#         if seq[i] != image_token_id:
+#             # 非图像标记直接保留
+#             new_tokens.append(seq[i].item())
+#             indices.append(i)
+#             i += 1
+#         else:
+#             # 找到连续的 image_token 段
+#             start_idx = i
+#             while i < len(seq) and seq[i] == image_token_id:
+#                 i += 1
+#             segment_len = i - start_idx
+
+#             # 如果还有 quota，就保留这一段的一部分
+#             retain_num = min(total_retain, segment_len)
+#             if retain_num > 0:
+#                 new_tokens.extend(seq[start_idx:start_idx + retain_num].tolist())
+#                 indices.extend(range(start_idx, start_idx + retain_num))
+#                 total_retain -= retain_num
+
+#             # quota 用完后，后面的 image_token 段就全跳过
+#             if total_retain <= 0:
+#                 # 跳过剩余的 image_token 段
+#                 while i < len(seq):
+#                     if seq[i] != image_token_id:
+#                         new_tokens.append(seq[i].item())
+#                         indices.append(i)
+#                     i += 1
+#                 break
+
+#     new_input_ids = torch.tensor([new_tokens], dtype=torch.long, device=input_ids.device)
+#     indices = torch.tensor(indices, dtype=torch.long, device=input_ids.device)
+#     return new_input_ids, indices
+
+
+
+def _update_ids(input_ids, image_token_id, retained_nums):
+    assert input_ids.size(0) == 1
     seq = input_ids[0]  # [seq_len]
-    new_tokens = []
-    indices = []
 
-    # retained_nums 直接求和成一个总数
-    total_retain = int(
-        torch.tensor(retained_nums, device=input_ids.device).sum().item()
-    )
+    total_retain = int(torch.sum(retained_nums).item()) 
+    mask = torch.ones_like(seq, dtype=torch.bool)
 
-    i = 0
-    while i < len(seq):
-        if seq[i] != image_token_id:
-            # 非图像标记直接保留
-            new_tokens.append(seq[i].item())
-            indices.append(i)
-            i += 1
-        else:
-            # 找到连续的 image_token 段
-            start_idx = i
-            while i < len(seq) and seq[i] == image_token_id:
-                i += 1
-            segment_len = i - start_idx
+    # position of image_token 
+    image_positions = (seq == image_token_id).nonzero(as_tuple=True)[0]
 
-            # 如果还有 quota，就保留这一段的一部分
-            retain_num = min(total_retain, segment_len)
-            if retain_num > 0:
-                new_tokens.extend(seq[start_idx:start_idx + retain_num].tolist())
-                indices.extend(range(start_idx, start_idx + retain_num))
-                total_retain -= retain_num
+    # keep part of image_token
+    if total_retain < len(image_positions):
+        mask[image_positions[total_retain:]] = False
 
-            # quota 用完后，后面的 image_token 段就全跳过
-            if total_retain <= 0:
-                # 跳过剩余的 image_token 段
-                while i < len(seq):
-                    if seq[i] != image_token_id:
-                        new_tokens.append(seq[i].item())
-                        indices.append(i)
-                    i += 1
-                break
-
-    new_input_ids = torch.tensor([new_tokens], dtype=torch.long, device=input_ids.device)
-    indices = torch.tensor(indices, dtype=torch.long, device=input_ids.device)
+    new_input_ids = seq[mask].unsqueeze(0)
+    indices = mask.nonzero(as_tuple=True)[0]
     return new_input_ids, indices

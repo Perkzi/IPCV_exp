@@ -1493,7 +1493,7 @@ class DART(Qwen2VLModel):
                             )
                         #print("po",position_ids.shape,keep_indexs.shape)#torch.Size([3, 1, 1378]) torch.Size([354])
                         position_ids = position_ids[:, :, keep_indexs]
-                        #print(causal_mask,position_ids.shape)None torch.Size([3, 1, 354])
+                        #print("causal_mask2",causal_mask,position_ids.shape)#None torch.Size([3, 1, 354])
 
                 # if causal_mask is not None:
                 #     print("causal_mask",causal_mask,causal_mask.shape)
@@ -2057,9 +2057,12 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
             #print("CUDA memory before creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
             inputs_embeds = self.model.embed_tokens(input_ids) # [batch_size, seq_len, hidden_size]
             #print("CUDA memory after creating inputs_embeds:", torch.cuda.memory_allocated()/1024**2,"MB")
+
+            # time_vit_start = time.time()
+
             if pixel_values is not None:
                 #print("pixelvalue", pixel_values.shape)
-                # time_vit_start = time.time()
+                
                 # num_tokens_prev = input_ids.shape[1]
                 pixel_values = pixel_values.type(self.visual.get_dtype())
                 
@@ -2097,9 +2100,6 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                     # 把 image_embeds填入这些 <image> token 的 embedding 位置：
                     inputs_embeds[image_mask] = image_embeds
 
-                # time_vit_end = time.time()
-                # self.time_cost_vit += time_vit_end - time_vit_start
-                
                     
                 
             if pixel_values_videos is not None:
@@ -2127,6 +2127,8 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
                     video_mask = input_ids == self.config.video_token_id
                     inputs_embeds[video_mask] = video_embeds
                     
+            # time_vit_end = time.time()
+            # self.time_cost_vit += time_vit_end - time_vit_start
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
@@ -2308,6 +2310,7 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         seq_len = hidden_states_pkg['hidden_states'].shape[0]
         rand_idx = random.randrange(seq_len)
         #--------------
+        
         for i, blk in enumerate(self.blocks):
             DART_config = self.config.DART_config
             #print("dartconfig",DART_config)
@@ -2737,50 +2740,70 @@ class Qwen2RMSNorm_no_param(nn.Module):
 #     return new_input_ids, indices
 
 
-def _update_ids(input_ids, image_token_id, retained_nums):
-    # 确保 batch_size=1
-    assert input_ids.size(0) == 1, "Batch size must be 1"
+# def _update_ids(input_ids, image_token_id, retained_nums):
+#     # 确保 batch_size=1
+#     assert input_ids.size(0) == 1, "Batch size must be 1"
     
+#     seq = input_ids[0]  # [seq_len]
+#     new_tokens = []
+#     indices = []
+
+#     # retained_nums 直接求和成一个总数
+#     total_retain = int(
+#         torch.tensor(retained_nums, device=input_ids.device).sum().item()
+#     )
+
+#     i = 0
+#     while i < len(seq):
+#         if seq[i] != image_token_id:
+#             # 非图像标记直接保留
+#             new_tokens.append(seq[i].item())
+#             indices.append(i)
+#             i += 1
+#         else:
+#             # 找到连续的 image_token 段
+#             start_idx = i
+#             while i < len(seq) and seq[i] == image_token_id:
+#                 i += 1
+#             segment_len = i - start_idx
+
+#             # 如果还有 quota，就保留这一段的一部分
+#             retain_num = min(total_retain, segment_len)
+#             if retain_num > 0:
+#                 new_tokens.extend(seq[start_idx:start_idx + retain_num].tolist())
+#                 indices.extend(range(start_idx, start_idx + retain_num))
+#                 total_retain -= retain_num
+
+#             # quota 用完后，后面的 image_token 段就全跳过
+#             if total_retain <= 0:
+#                 # 跳过剩余的 image_token 段
+#                 while i < len(seq):
+#                     if seq[i] != image_token_id:
+#                         new_tokens.append(seq[i].item())
+#                         indices.append(i)
+#                     i += 1
+#                 break
+
+#     new_input_ids = torch.tensor([new_tokens], dtype=torch.long, device=input_ids.device)
+#     indices = torch.tensor(indices, dtype=torch.long, device=input_ids.device)
+#     return new_input_ids, indices
+
+
+def _update_ids(input_ids, image_token_id, retained_nums):
+    assert input_ids.size(0) == 1
     seq = input_ids[0]  # [seq_len]
-    new_tokens = []
-    indices = []
 
-    # retained_nums 直接求和成一个总数
-    total_retain = int(
-        torch.tensor(retained_nums, device=input_ids.device).sum().item()
-    )
+    total_retain = int(torch.sum(retained_nums).item()) 
+    mask = torch.ones_like(seq, dtype=torch.bool)
 
-    i = 0
-    while i < len(seq):
-        if seq[i] != image_token_id:
-            # 非图像标记直接保留
-            new_tokens.append(seq[i].item())
-            indices.append(i)
-            i += 1
-        else:
-            # 找到连续的 image_token 段
-            start_idx = i
-            while i < len(seq) and seq[i] == image_token_id:
-                i += 1
-            segment_len = i - start_idx
+    # position of image_token 
+    image_positions = (seq == image_token_id).nonzero(as_tuple=True)[0]
 
-            # 如果还有 quota，就保留这一段的一部分
-            retain_num = min(total_retain, segment_len)
-            if retain_num > 0:
-                new_tokens.extend(seq[start_idx:start_idx + retain_num].tolist())
-                indices.extend(range(start_idx, start_idx + retain_num))
-                total_retain -= retain_num
+    # keep part of image_token
+    if total_retain < len(image_positions):
+        mask[image_positions[total_retain:]] = False
 
-            # quota 用完后，后面的 image_token 段就全跳过
-            if total_retain <= 0:
-                # 跳过剩余的 image_token 段
-                while i < len(seq):
-                    if seq[i] != image_token_id:
-                        new_tokens.append(seq[i].item())
-                        indices.append(i)
-                    i += 1
-                break
-
-    new_input_ids = torch.tensor([new_tokens], dtype=torch.long, device=input_ids.device)
-    indices = torch.tensor(indices, dtype=torch.long, device=input_ids.device)
+    new_input_ids = seq[mask].unsqueeze(0)
+    indices = mask.nonzero(as_tuple=True)[0]
     return new_input_ids, indices
+

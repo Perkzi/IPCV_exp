@@ -9,9 +9,9 @@
 
 tasks=("mmbench_en")
 pruned_layers=(3)
-reduction_ratios=(0.8)
+reduction_ratios=(0.95)
 vit_pruned_layers=(7)
-vit_reduction_ratios=(0.8)
+vit_reduction_ratios=(0.95)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -32,8 +32,8 @@ for task in "${tasks[@]}"; do
           #model_id="Qwen/Qwen2-VL-7B-Instruct"
           #model_name="Qwen2-VL-7B-Instruct"
 
-          #model_id="OpenGVLab/InternVL3-38B"
-          #model_name="InternVL3-38B"
+          # model_id="OpenGVLab/InternVL3-38B"
+          # model_name="InternVL3-38B"
           model_id="OpenGVLab/InternVL3-8B"
           model_name="InternVL3-8B"
 
@@ -67,21 +67,21 @@ for task in "${tasks[@]}"; do
           torch_dtype=float16
 
           #GPU=0,1,2,3
-          GPU=6
+          # GPU=7
 
           # 定义log文件名
           log_file="${output_path}/run_detail.log"
 
-          CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
-              --num_processes=1 \
-              --main_process_port 50008 \
-              -m lmms_eval \
-              --model internvl2_dart_vit \
-              --model_args pretrained=$model_id,device_map=auto,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype \
-              --tasks "${task}" \
-              --batch_size 1 \
-              --log_samples \
-              --output_path "$output_path" 2>&1 | tee "$log_file"
+          # CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
+          #     --num_processes=1 \
+          #     --main_process_port 50008 \
+          #     -m lmms_eval \
+          #     --model internvl2_dart_vit \
+          #     --model_args pretrained=$model_id,device_map=auto,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype \
+          #     --tasks "${task}" \
+          #     --batch_size 1 \
+          #     --log_samples \
+          #     --output_path "$output_path" 2>&1 | tee "$log_file"
 
           # CUDA_VISIBLE_DEVICES=$GPU python3 -m accelerate.commands.launch \
           #   --num_processes=1 \
@@ -94,6 +94,16 @@ for task in "${tasks[@]}"; do
           #   --log_samples \
           #   --output_path "$output_path"
 
+          python3 -m accelerate.commands.launch \
+            --num_processes=1 \
+            --main_process_port 50008 \
+            -m lmms_eval \
+            --model internvl2_dart_vit \
+            --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype \
+            --tasks "${task}" \
+            --batch_size 1 \
+            --log_samples \
+            --output_path "$output_path"
 
           # ���Ӽ��ʱ�����˿ڳ�ͻ
           sleep 10

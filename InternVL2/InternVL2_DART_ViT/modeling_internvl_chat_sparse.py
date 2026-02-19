@@ -122,16 +122,19 @@ class InternVLChatModel(PreTrainedModel):
 
         
 
-        #print("pixel_values",pixel_values.shape)
+        # print("pixel_values",pixel_values.shape)
+        
         vit_embeds = self.extract_feature(pixel_values)
+        # print("vit_embeds",vit_embeds,vit_embeds.shape,image_flags,image_flags.shape)
         vit_embeds = vit_embeds[image_flags == 1]
+
         vit_batch_size = pixel_values.shape[0]
 
         
 
         B, N, C = input_embeds.shape
         input_embeds = input_embeds.reshape(B * N, C)
-        #print("vit_embeds input_embeds",vit_embeds.shape,input_embeds.shape)
+        # print("vit_embeds input_embeds",vit_embeds.shape,input_embeds.shape)
 
         if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
             print(f'dynamic ViT batch size: {vit_batch_size}, images per sample: {vit_batch_size / B}, dynamic token length: {N}')
@@ -452,7 +455,7 @@ class InternVLChatModel(PreTrainedModel):
         time_llm_end = time.time()
         self.time_cost_llm += time_llm_end - time_llm_start
         
-        # print("time_cost_vit", self.time_cost_vit,"time_cost_llm", self.time_cost_llm, "time_cost_proj", self.time_cost_proj)
+        print("time_cost_vit", self.time_cost_vit,"time_cost_llm", self.time_cost_llm, "time_cost_proj", self.time_cost_proj)
 
         return outputs
 

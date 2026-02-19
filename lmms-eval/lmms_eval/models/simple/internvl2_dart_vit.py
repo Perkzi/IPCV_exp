@@ -458,6 +458,8 @@ class InternVL2_DART_ViT(lmms):
             #     "top_p": 1.0,
             # })
             #------------prefilling only end----------------
+            if isinstance(visuals[0], str) and visuals[0].endswith(".mp4"):
+                self.modality = "video"
 
             if self.modality == "image":
                 if visuals:

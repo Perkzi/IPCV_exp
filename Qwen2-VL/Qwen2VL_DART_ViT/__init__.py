@@ -29,11 +29,14 @@
 
 #from .modeling_qwen2_vl_FastV import Qwen2VLForConditionalGeneration
 
-from .modeling_qwen2_vl_SparseVLM import Qwen2VLForConditionalGeneration
+#from .modeling_qwen2_vl_SparseVLM import Qwen2VLForConditionalGeneration
 
 #from .modeling_qwen2_vl_Token_fusion import Qwen2VLForConditionalGeneration
 
 
+#from .modeling_qwen2_vl_Hiprune import Qwen2VLForConditionalGeneration
+
+from .modeling_qwen2_vl_Saint import Qwen2VLForConditionalGeneration
 
 
 from .configuration_qwen2_vl_dart_vit import Qwen2VLConfig, Qwen2VLVisionConfig

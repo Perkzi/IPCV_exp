@@ -63,9 +63,12 @@ def mlvu_doc_to_visual_test(doc):
 
 def mlvu_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     question = doc["question"]
-    pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "")
-    post_prompt = lmms_eval_specific_kwargs.get("post_prompt", "")
-    full_prompt = pre_prompt + question + post_prompt
+    if lmms_eval_specific_kwargs!=None:
+        pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "")
+        post_prompt = lmms_eval_specific_kwargs.get("post_prompt", "")
+        full_prompt = pre_prompt + question + post_prompt
+    else:
+        full_prompt = ''
     return full_prompt
 
 
