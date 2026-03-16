@@ -4,16 +4,16 @@
 # ������������
 # tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "seedbench" "vqav2" "textvqa" "vizwiz_vqa" "ocrbench")  # ʾ�������б�
 #        ("mvbench")
-# ("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "seedbench" "textvqa" "vizwiz_vqa" "ocrbench")
+# ("gqa" "mmbench_en" "mmbench_cn" "mme" "pope"  "textvqa" "vizwiz_vqa" "ocrbench")  "seedbench"
 # ("mvbench" "videomme" "mlvu" "egoschema")
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
-tasks=("gqa"  "mmbench_cn" "mme" "pope" "seedbench" "textvqa" "vizwiz_vqa" "ocrbench")
+tasks=("mmbench_en") # "gqa"  "mmbench_cn" "mme" "pope"  "textvqa" "vizwiz_vqa" "ocrbench"
 pruned_layers=(3)
-reduction_ratios=(0.93)
+reduction_ratios=(0.930)
 vit_pruned_layers=(3)
-vit_reduction_ratios=(0.93)
+vit_reduction_ratios=(0.930)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -42,7 +42,7 @@ for task in "${tasks[@]}"; do
           # 对于similarity_kv， Sparse和vit_Sparse都要为True
           # 对于modeling_qwen2_vl_dart_vit_base和其它方法，在主模型prune的Sparse=True,vit_Sparse=False，在vit prune的Sparse=False,vit_Sparse=True
           # 对于vanilla (modeling_qwen2_vl_dart_vit_base)  Sparse和vit_Sparse都要为False
-          Sparse=False
+          Sparse=True
           vit_Sparse=False
           image_token_start_index=0
           image_token_length=0
@@ -59,12 +59,12 @@ for task in "${tasks[@]}"; do
           # 修改在vit上的剪枝方法
           vit_random_choose=False
           vit_attn_scores_choose=False
-          vit_diff_choose=False
+          vit_diff_choose=True
           vit_pivot_sim_choose=False
 
           torch_dtype=float16
 
-          method=sparsevlm  # default base ipcv 
+          method=sparsevlm # default base ipcv fastv sparsevlm v2drop tome tofu saint ficoco
 
           #GPU=0,1,2,3
           #GPU=7
@@ -95,8 +95,8 @@ for task in "${tasks[@]}"; do
           #   --output_path "$output_path"
 
           python3 -m accelerate.commands.launch \
-              --num_processes=6 \
-              --main_process_port 50008 \
+              --num_processes=1 \
+              --main_process_port 50035 \
               -m lmms_eval \
               --model qwen3_vl_ipcv \
               --model_args pretrained=$model_id,device_map=cuda,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype,method=$method \

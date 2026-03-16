@@ -52,6 +52,18 @@ def get_model_class(method: str):
         module = importlib.import_module("qwen3_vl_ipcv.modeling_qwen3_vl_SparseVLM")
     elif method == "v2drop":
         module = importlib.import_module("qwen3_vl_ipcv.modeling_qwen3_vl_V2Drop")
+    elif method == "tome":
+        module = importlib.import_module("qwen3_vl_ipcv.modeling_qwen3_vl_ToMe")
+    elif method == "tofu":
+        module = importlib.import_module("qwen3_vl_ipcv.modeling_qwen3_vl_ToFu")
+    elif method == "saint":
+        module = importlib.import_module("qwen3_vl_ipcv.modeling_qwen3_vl_Saint")
+    elif method == "sito":
+        module = importlib.import_module("qwen3_vl_ipcv.modeling_qwen3_vl_SiTo")
+    elif method == "ficoco":
+        module = importlib.import_module("qwen3_vl_ipcv.modeling_qwen3_vl_FiCoCo")
+    elif method == "visualize":
+        module = importlib.import_module("qwen3_vl_ipcv.modeling_qwen3_vl_IPCV_visualize")
     else:
         raise ValueError(f"Unknown method: {method}")
 

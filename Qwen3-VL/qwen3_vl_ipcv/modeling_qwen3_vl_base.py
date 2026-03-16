@@ -22,6 +22,7 @@ from collections.abc import Callable
 import copy
 from dataclasses import dataclass
 import random
+import time
 from typing import Any, Optional
 
 import torch
@@ -1116,7 +1117,7 @@ class Qwen3VLVisionModel_Sparse(Qwen3VLVisionModel):
                     frame_indices = frame_indices.clamp(min=0, max=num_frames-1)
                     # 统计每帧保留的token数量
                     frame_counts = torch.bincount(frame_indices, minlength=num_frames)
-                    #print("frame1",cu_seqlens,frame_counts)tensor([   0, 5220], device='cuda:0', dtype=torch.int32) tensor([4176], device='cuda:0')
+                    #print("frame1",cu_seqlens,frame_counts)#tensor([   0, 5220], device='cuda:0', dtype=torch.int32) tensor([4176], device='cuda:0')
                     
                     # 计算新的cu_seqlens
                     new_cu_seqlens = torch.zeros(len(cu_seqlens), dtype=torch.int32, device=device)
@@ -2269,6 +2270,8 @@ class Qwen3VLModel_Sparse(Qwen3VLModel):
         self.visual = Qwen3VLVisionModel_Sparse._from_config(config.vision_config)
         self.language_model = Qwen3VLTextModel_Sparse._from_config(config.text_config)
 
+        self.time_cost_vit = 0
+        self.time_cost_llm = 0
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -2333,6 +2336,8 @@ class Qwen3VLModel_Sparse(Qwen3VLModel):
 
         image_mask = None
         video_mask = None
+        
+        time_vit_start = time.time()
 
         if pixel_values is not None and self.config.IPCV_config['vit_Sparse']:
             image_outputs, split_sizes = self.get_image_features(
@@ -2385,7 +2390,7 @@ class Qwen3VLModel_Sparse(Qwen3VLModel):
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
         if pixel_values_videos is not None:
-            video_outputs: BaseModelOutputWithDeepstackFeatures = self.get_video_features(
+            video_outputs, _ = self.get_video_features(
                 pixel_values_videos, video_grid_thw, return_dict=True
             )
             video_embeds = video_outputs.pooler_output
@@ -2395,6 +2400,9 @@ class Qwen3VLModel_Sparse(Qwen3VLModel):
                 input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds
             )
             inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
+
+        time_vit_end = time.time()
+        self.time_cost_vit += time_vit_end - time_vit_start
 
         visual_pos_masks = None
         deepstack_visual_embeds = None
@@ -2450,6 +2458,7 @@ class Qwen3VLModel_Sparse(Qwen3VLModel):
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
 
+        time_llm_start = time.time()
         outputs = self.language_model(
             input_ids=None,
             position_ids=position_ids,
@@ -2461,6 +2470,11 @@ class Qwen3VLModel_Sparse(Qwen3VLModel):
             deepstack_visual_embeds=deepstack_visual_embeds,
             **kwargs,
         )
+
+        time_llm_end = time.time()
+        self.time_cost_llm += time_llm_end - time_llm_start
+        #print("time_cost_vit", self.time_cost_vit,"time_cost_llm", self.time_cost_llm)
+
 
         return Qwen3VLModelOutputWithPast(
             last_hidden_state=outputs.last_hidden_state,

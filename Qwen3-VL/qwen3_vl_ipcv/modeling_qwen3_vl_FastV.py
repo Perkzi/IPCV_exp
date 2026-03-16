@@ -1016,12 +1016,7 @@ class Qwen3VLVisionModel_Sparse(Qwen3VLVisionModel):
                             'attn_scores':None}                 # [nheads,seqlen,seqlen] TODO: 优化显存占用
         frame_counts = None #torch.zeros(1, device=device)
         hidden_states_prev = None
-        # ---------用于可视化-------
-        # 最终会是一个长度 L 的列表，每项 shape=[N, D]
-        random_vectors = []
-        mean_vectors   = []  
-        seq_len = hidden_states_pkg['hidden_states'].shape[0]
-        rand_idx = random.randrange(seq_len)
+        
         #--------------
 
         deepstack_feature_lists = []
@@ -1144,8 +1139,8 @@ class Qwen3VLVisionModel_Sparse(Qwen3VLVisionModel):
 
             hidden_states = hidden_states_pkg['hidden_states']
             
-            if layer_num == len(self.blocks)-1 and hasattr(self, "_sparse_vit_saved"):
-                del self._sparse_vit_saved
+            # if layer_num == len(self.blocks)-1 and hasattr(self, "_sparse_vit_saved"):
+            #     del self._sparse_vit_saved
         
 
             # hidden_states = blk(
@@ -1449,6 +1444,8 @@ class Qwen3VLTextModel_Sparse(Qwen3VLTextModel):
                     attn_scores = layer_outputs['attn_scores'].detach().clone()
                     retained_image_tokens_index = self.get_retained_image_token_attn_scores(
                         self.config, last_layer_state, k_states,attn_scores).to(device)
+                    # retained_image_tokens_index = self.get_retained_image_token(
+                    #     self.config, last_layer_state, k_states).to(device)
                     # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
                 
 
@@ -1552,6 +1549,7 @@ class Qwen3VLTextModel_Sparse(Qwen3VLTextModel):
         seq_length = attn_scores.size(-1)
 
         # [1, nheads, seqlen, seqlen] -> [nheads, seqlen, seqlen]
+        # print("attn_scores",attn_scores.shape)
         attn_scores = attn_scores.squeeze(0)
         # 对不同 head 求平均
         attn_scores = attn_scores.mean(dim=0)  # [seqlen, seqlen]
@@ -1577,6 +1575,58 @@ class Qwen3VLTextModel_Sparse(Qwen3VLTextModel):
         keep_indices = torch.tensor(top_k_real_indices, device=device).sort().values
 
         return keep_indices
+    
+    def get_retained_image_token(self, config, last_layer_state: torch.Tensor, any_states: torch.Tensor) -> torch.Tensor:
+        #获取保留的index
+        IPCV_config = config.IPCV_config
+        #K = DART_config['K']  # pruned layer
+        image_token_start_index = IPCV_config['image_token_start_index']
+        image_token_length = IPCV_config['image_token_length']
+
+        pivot_image_token = IPCV_config['pivot_image_token']
+        pivot_text_token = IPCV_config['pivot_text_token']
+
+        reduction_ratio = IPCV_config['reduction_ratio']
+        TOKEN_TOPK = int(image_token_length * (1 - reduction_ratio) / (pivot_image_token + pivot_text_token))
+        #print("topk",TOKEN_TOPK,image_token_length,pivot_image_token,pivot_text_token) #topk 36 1316 4 4
+        device = last_layer_state.device
+
+        any_states = any_states.permute(0, 2, 1, 3).reshape(any_states.shape[0], any_states.shape[2], -1)[0]
+        #print("key_states",any_states.shape)#torch.Size([1378, 3584])
+
+        k_states_image_token = any_states[image_token_start_index:image_token_start_index + image_token_length, :]#image token之前的是system？
+        k_states_query_token = any_states[image_token_start_index + image_token_length:, :]
+
+        k_states_image_token_L1_norm = torch.norm(k_states_image_token, p=1, dim=-1)
+        k_states_query_token_L1_norm = torch.norm(k_states_query_token, p=1, dim=-1)
+
+        #print("k_states_image_token_L1_norm",k_states_image_token_L1_norm.shape,pivot_image_token,image_token_start_index)
+
+        image_indices = (k_states_image_token_L1_norm.topk(pivot_image_token).indices + image_token_start_index).tolist() 
+        query_indices = (k_states_query_token_L1_norm.topk(pivot_text_token).indices + image_token_start_index + image_token_length).tolist()
+        indices_set = set(image_indices + query_indices)#图像和文本各选几个pivot
+
+        valid_indices = set(range(image_token_start_index, image_token_start_index + image_token_length)) - set(image_indices)  #但还是只在图像里剪枝
+
+        valid_indices_list = list(valid_indices)  
+
+        for item in list(indices_set):
+            valid_vectors = last_layer_state[0][valid_indices_list, :]
+            cos_sim = -torch.nn.functional.cosine_similarity(last_layer_state[0][item, :], valid_vectors, dim=-1)
+            top_k_indices = cos_sim.topk(TOKEN_TOPK).indices
+
+            top_k_real_indices = [valid_indices_list[i] for i in top_k_indices]
+            indices_set.update(top_k_real_indices)
+            
+            valid_indices.difference_update(top_k_real_indices) #等价于valid_indices = valid_indices - set(top_k_real_indices)
+            valid_indices_list = list(valid_indices)  
+
+        indices_set.difference_update(query_indices)
+
+        retained_image_tokens_index = torch.tensor(list(indices_set), device=device)
+
+        return retained_image_tokens_index
+   
 
     
 
@@ -1606,6 +1656,8 @@ class Qwen3VLTextModel_Sparse(Qwen3VLTextModel):
         # 替换 block
         self.layers[k] = new_block
         return 
+
+    
 
 
 @auto_docstring

@@ -1,0 +1,2 @@
+L1 NGR - Mean: 20120.6796, Median: 17513.9805
+Cosine NGR - Mean: 0.9871, Median: 0.9996

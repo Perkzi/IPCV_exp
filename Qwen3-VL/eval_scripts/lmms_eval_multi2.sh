@@ -9,7 +9,7 @@
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
-tasks=("mmbench_en")
+tasks=( "gqa"  "mmbench_cn" "mme" "pope" "seedbench" "textvqa" "vizwiz_vqa" "ocrbench")
 pruned_layers=(3)
 reduction_ratios=(0.95)
 vit_pruned_layers=(3)
@@ -59,12 +59,12 @@ for task in "${tasks[@]}"; do
           # 修改在vit上的剪枝方法
           vit_random_choose=False
           vit_attn_scores_choose=False
-          vit_diff_choose=True
+          vit_diff_choose=False
           vit_pivot_sim_choose=False
 
           torch_dtype=float16
 
-          method=fastv # default base ipcv fastv sparsevlm v2drop
+          method=saint # default base ipcv fastv sparsevlm v2drop tome tofu saint
 
           #GPU=0,1,2,3
           #GPU=7
@@ -96,7 +96,7 @@ for task in "${tasks[@]}"; do
 
           python3 -m accelerate.commands.launch \
               --num_processes=1 \
-              --main_process_port 50008 \
+              --main_process_port 50048 \
               -m lmms_eval \
               --model qwen3_vl_ipcv \
               --model_args pretrained=$model_id,device_map=cuda,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype,method=$method \

@@ -198,7 +198,7 @@ class Qwen3_VL_IPCV(lmms):
 
         
         self._config = self.model.config
-        print("self._config",self._config)
+        #print("self._config",self._config)
         self._max_length = kwargs.get("max_length", 2048)
         self.batch_size_per_gpu = int(batch_size)
         self.use_cache = use_cache
@@ -478,6 +478,22 @@ class Qwen3_VL_IPCV(lmms):
                 max_new_tokens=current_gen_kwargs["max_new_tokens"],
                 use_cache=self.use_cache,
             )
+            
+            # ---------------test prefilling only-------------------
+            # cont = self.model.generate(
+            #     **inputs,
+            #     eos_token_id=self.tokenizer.eos_token_id,
+            #     pad_token_id=pad_token_id,
+            #     do_sample=current_gen_kwargs["do_sample"],
+            #     temperature=current_gen_kwargs["temperature"],
+            #     top_p=current_gen_kwargs["top_p"],
+            #     num_beams=current_gen_kwargs["num_beams"],
+            #     max_new_tokens=1,              #  固定为 1
+            #     use_cache=self.use_cache,
+            # )
+            # print("prefill")
+            # ---------------test prefilling only end-------------------
+
 
             # ---------------compute time-------------
             end_event.record()

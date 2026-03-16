@@ -21,6 +21,7 @@
 from collections.abc import Callable
 import copy
 from dataclasses import dataclass
+import math
 import random
 from typing import Any, Optional
 
@@ -314,6 +315,7 @@ class Qwen3VLVisionAttention_Sparse(Qwen3VLVisionAttention):
         else:
             # Other implementations: Process each chunk separately
             lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+            #print("attn split",lengths,query_states.shape,cu_seqlens)
             splits = [
                 torch.split(tensor, lengths.tolist(), dim=2) for tensor in (query_states, key_states, value_states)
             ]
@@ -410,7 +412,7 @@ class Qwen3VLVisionBlock_Sparse(Qwen3VLVisionBlock):
         merged_idx = None
         # 直接合并（精简版 ToMe）
         if tome_r > 0:
-            print("key_states",key_states.shape,hidden_states.shape)
+            #print("key_states",key_states.shape,hidden_states.shape)
             metric = key_states.squeeze(0).permute(1, 0, 2).mean(1)  # [seq_len, head_dim]
             # 这里假设 batch=1，如果有多 batch 需要 reshape
             hidden_states, merged_idx = bipartite_soft_merge(
@@ -419,7 +421,7 @@ class Qwen3VLVisionBlock_Sparse(Qwen3VLVisionBlock):
                 tome_r
             )
             hidden_states = hidden_states.squeeze(0)
-            print("hidden_states after",hidden_states.shape)
+            #print("hidden_states after",hidden_states.shape)
             # === 重新计算 cu_seqlens ===
             # 原始每个样本的 token 数
             frame_counts = cu_seqlens[1:] - cu_seqlens[:-1]  # [B]
@@ -452,7 +454,7 @@ class Qwen3VLVisionBlock_Sparse(Qwen3VLVisionBlock):
             # 重新生成 cu_seqlens
             new_cu_seqlens = torch.zeros_like(cu_seqlens)
             new_cu_seqlens[1:] = new_frame_counts.cumsum(0)
-            print("cu_seqlens",cu_seqlens,new_cu_seqlens)
+            #print("cu_seqlens",cu_seqlens,new_cu_seqlens)
             cu_seqlens = new_cu_seqlens
 
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
@@ -1155,28 +1157,33 @@ class Qwen3VLVisionModel_Sparse(Qwen3VLVisionModel):
                     #     rotary_pos_emb=rotary_pos_emb,
                     #     tome_r=tome_r
                     # )
+                    #print("input",hidden_states_pkg['hidden_states'].shape, cu_seqlens,position_embeddings[0].shape)
                     hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, position_embeddings=position_embeddings,tome_r=tome_r, **kwargs)
 
                     # 更新当前保留比例
                     current_keep_ratio *= desired_keep_ratio
                     # 更新位置编码
                     #rotary_pos_emb = rotary_pos_emb[hidden_states_pkg['merged_idx'],:][0]
-                    position_embeddings_pruned = (position_embeddings[0][hidden_states_pkg['merged_idx'],:], position_embeddings[1][hidden_states_pkg['merged_idx'],:])
+                    position_embeddings = (position_embeddings[0][hidden_states_pkg['merged_idx'][0],:], position_embeddings[1][hidden_states_pkg['merged_idx'][0],:])
 
                     cu_seqlens = hidden_states_pkg['cu_seqlens']
                     frame_counts = cu_seqlens[1:] - cu_seqlens[:-1]  # [B]
-                    
+                    #print("frame count",frame_counts,position_embeddings[0].shape,hidden_states_pkg['merged_idx'].shape,hidden_states_pkg['merged_idx'])
                     #print("seq-len",orig_seq_len,cu_seqlens)
                     #print("cu_seqlens1",cu_seqlens_pruned)
                     #print(cu_seqlens_pruned.shape)
 
                     # TODO:如果已经deepstack了，对deepstack_visual剪枝
+
+
+
+                    # TODO
                     # if deepstack_feature_lists != []:
                     #     for i, embeds in enumerate(deepstack_feature_lists):
                 else:
-                    hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, position_embeddings=position_embeddings_pruned, **kwargs)
+                    hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, position_embeddings=position_embeddings, **kwargs)
             else:
-                hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, position_embeddings=position_embeddings_pruned, **kwargs)
+                hidden_states_pkg = blk(hidden_states_pkg, cu_seqlens=cu_seqlens, position_embeddings=position_embeddings, **kwargs)
 
 
             hidden_states = hidden_states_pkg['hidden_states']
