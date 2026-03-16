@@ -878,10 +878,13 @@ class Qwen2Model_Sparse(Qwen2Model):
                                     image_token_start_index + image_token_length,
                                     device=device)
         #print("all",all_img_indices,keep_indices)
-        drop_indices = torch.tensor([i for i in all_img_indices.tolist()
-                                    if i not in keep_indices.tolist()],
-                                    device=device)
-
+        # drop_indices = torch.tensor([i for i in all_img_indices.tolist()
+        #                             if i not in keep_indices.tolist()],
+        #                             device=device)
+        # 这一行完美等价于你注释掉的循环逻辑，且 100% 运行在 GPU 上
+        # 它会检查 all_img_indices 中的每个值是否出现在 keep_indices 中
+        mask = ~torch.isin(all_img_indices, keep_indices)
+        drop_indices = all_img_indices[mask]
 
 
         merged_hidden_states = None

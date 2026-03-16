@@ -4,16 +4,16 @@
 # ������������
 # tasks=("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "scienceqa_img" "seedbench" "vqav2" "textvqa" "vizwiz_vqa" "ocrbench")  # ʾ�������б�
 # ("gqa" "mmbench_en" "mmbench_cn" "mme" "pope" "seedbench" "textvqa" "vizwiz_vqa" "ocrbench")
-#        ("mvbench")
+#        ("mvbench" "videomme")
 # pruned_layers=(2 3 5)     # ��֦������ѡ
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
 #tasks=(  "refcoco" )
-tasks=() # "refcoco_bbox_rec_val" "refcoco_bbox_rec_testA" "refcoco_bbox_rec_testB")
+tasks=("mmbench_en") # "refcoco_bbox_rec_val" "refcoco_bbox_rec_testA" "refcoco_bbox_rec_testB") "mvbench"
 pruned_layers=(3)
-reduction_ratios=( 0.95)
+reduction_ratios=( 0.582)  # spavlm 0.229 0.582 0.936  v2d 0.385 0.622 0.897
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.95)
+vit_reduction_ratios=(0.582)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -63,6 +63,10 @@ for task in "${tasks[@]}"; do
 
           torch_dtype=float16
 
+          method=sparsevlm # default base ipcv fastv sparsevlm v2drop tome tofu saint ficoco sito hiprune
+
+          log_file="${output_path}/run_detail.log"
+
           #GPU=0,1,2,3
           # GPU=0
 
@@ -71,22 +75,33 @@ for task in "${tasks[@]}"; do
           #     --main_process_port 50008 \
           #     -m lmms_eval \
           #     --model qwen2_vl_dart_vit \
-          #     --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype \
+          #     --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype,method=$method \
           #     --tasks "${task}" \
           #     --batch_size 1 \
           #     --log_samples \
           #     --output_path "$output_path"
 
           python3 -m accelerate.commands.launch \
-              --num_processes=4 \
-              --main_process_port 50008 \
+              --num_processes=1 \
+              --main_process_port 50035 \
               -m lmms_eval \
               --model qwen2_vl_dart_vit \
-              --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype \
+              --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype,method=$method \
               --tasks "${task}" \
               --batch_size 1 \
               --log_samples \
               --output_path "$output_path"
+
+          # python3 -m accelerate.commands.launch \
+          #     --num_processes=1 \
+          #     --main_process_port 50035 \
+          #     -m lmms_eval \
+          #     --model qwen2_vl_dart_vit \
+          #     --model_args pretrained=$model_id,device_map=cuda,use_flash_attention_2=True,Sparse=$Sparse,vit_Sparse=$vit_Sparse,pruned_layer=$pruned_layer,vit_pruned_layer=$vit_pruned_layer,image_token_start_index=$image_token_start_index,image_token_length=$image_token_length,max_num_trunction=$max_num_trunction,reduction_ratio=$reduction_ratio,vit_reduction_ratio=$vit_reduction_ratio,pivot_image_token=$pivot_image_token,pivot_text_token=$pivot_text_token,random_choose=$random_choose,attn_scores_choose=$attn_scores_choose,diff_choose=$diff_choose,pivot_sim_choose=$pivot_sim_choose,vit_random_choose=$vit_random_choose,vit_attn_scores_choose=$vit_attn_scores_choose,vit_diff_choose=$vit_diff_choose,vit_pivot_sim_choose=$vit_pivot_sim_choose,torch_dtype=$torch_dtype,method=$method \
+          #     --tasks "${task}" \
+          #     --batch_size 1 \
+          #     --log_samples \
+          #     --output_path "$output_path" 2>&1 | tee "$log_file"
 
 
           # ���Ӽ��ʱ�����˿ڳ�ͻ

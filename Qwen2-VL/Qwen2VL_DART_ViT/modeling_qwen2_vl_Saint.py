@@ -2429,10 +2429,10 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         device = hidden_states.device
         dtype = hidden_states.dtype
         
-        if self.config.DART_config is not None and self.config.DART_config['vit_Sparse'] and self.config.DART_config['vit_attn_scores_choose']\
-            and not self.update_attention_layer:
-            self.update_vision_block(device,dtype)
-            self.update_attention_layer=True
+        # if self.config.DART_config is not None and self.config.DART_config['vit_Sparse'] and self.config.DART_config['vit_attn_scores_choose']\
+        #     and not self.update_attention_layer:
+        #     self.update_vision_block(device,dtype)
+        #     self.update_attention_layer=True
 
         #--------------------BEGIN------------------------------------
         hidden_states_pkg = {'hidden_states':hidden_states, # [seq_len, embed_dim]

@@ -1428,10 +1428,10 @@ class DART(Qwen2VLModel):
         device = hidden_states.device
         dtype = hidden_states.dtype
 
-        if self.config.DART_config is not None and self.config.DART_config['Sparse'] and self.config.DART_config['attn_scores_choose']\
-            and not self.update_attention_layer:
-            self.update_layer(device,dtype)
-            self.update_attention_layer=True
+        # if self.config.DART_config is not None and self.config.DART_config['Sparse'] and self.config.DART_config['attn_scores_choose']\
+        #     and not self.update_attention_layer:
+        #     self.update_layer(device,dtype)
+        #     self.update_attention_layer=True
 
         assert batch_size == 1, "batch_size > 1 requires changes to some implementation"
 
@@ -1470,7 +1470,7 @@ class DART(Qwen2VLModel):
 
                         #last_layer_state = layer_outputs[0]  # 上一层的输出
                         last_layer_state = layer_outputs['hidden_states'].detach().clone()
-                        last_layer_state = self.norm(last_layer_state)
+                        # last_layer_state = self.norm(last_layer_state)
                         #k_states = layer_outputs[-2]# 上一层注意力之前的key
                         k_states = layer_outputs['key_states']
 
@@ -1481,30 +1481,30 @@ class DART(Qwen2VLModel):
                         #print("token index",last_layer_state.shape, k_states.shape)#,retained_image_tokens_index.shape)
                         #token index torch.Size([1, 1378, 3584]) torch.Size([1, 28, 1378, 128]) torch.Size([292])
 
-                        if DART_config['attn_scores_choose']:
-                            attn_scores = layer_outputs['attn_scores']
-                            retained_image_tokens_index = self.get_retained_image_token_attn_scores(
-                                self.config, last_layer_state, k_states,attn_scores).to(device)
-                            del layer_outputs['attn_scores']
-                            del attn_scores
-                            torch.cuda.synchronize()
-                            gc.collect()
-                            torch.cuda.empty_cache()
-                            # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
-                        elif DART_config['random_choose']:
-                            # 随机选取
-                            retained_image_tokens_index = self.get_retained_image_token_random(
-                                self.config, last_layer_state, k_states).to(device)
+                        # if DART_config['attn_scores_choose']:
+                        #     attn_scores = layer_outputs['attn_scores']
+                        #     retained_image_tokens_index = self.get_retained_image_token_attn_scores(
+                        #         self.config, last_layer_state, k_states,attn_scores).to(device)
+                        #     del layer_outputs['attn_scores']
+                        #     del attn_scores
+                        #     torch.cuda.synchronize()
+                        #     gc.collect()
+                        #     torch.cuda.empty_cache()
+                        #     # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
+                        # elif DART_config['random_choose']:
+                        #     # 随机选取
+                        #     retained_image_tokens_index = self.get_retained_image_token_random(
+                        #         self.config, last_layer_state, k_states).to(device)
                             
-                        elif DART_config['diff_choose']:
-                            hidden_states_cur = layer_outputs['hidden_states'][0] # K-1层的输出，即K层的输入
-                            retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+                        # elif DART_config['diff_choose']:
+                        #     hidden_states_cur = layer_outputs['hidden_states'][0] # K-1层的输出，即K层的输入
+                        #     retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
 
-                        elif DART_config['pivot_sim_choose']:
-                            retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
-                        else:
-                            retained_image_tokens_index = self.get_retained_image_token(
-                                self.config, last_layer_state, k_states).to(device)
+                        # elif DART_config['pivot_sim_choose']:
+                        #     retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
+                        # else:
+                        retained_image_tokens_index = self.get_retained_image_token(
+                            self.config, last_layer_state, k_states).to(device)
 
                         #print("start index",image_token_start_index,retained_image_tokens_index.sort().values,image_token_start_index+image_token_length)
                         
@@ -2325,10 +2325,10 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
         device = hidden_states.device
         dtype = hidden_states.dtype
 
-        if self.config.DART_config is not None and self.config.DART_config['vit_Sparse'] and self.config.DART_config['vit_attn_scores_choose']\
-            and not self.update_attention_layer:
-            self.update_vision_block(device,dtype)
-            self.update_attention_layer=True
+        # if self.config.DART_config is not None and self.config.DART_config['vit_Sparse'] and self.config.DART_config['vit_attn_scores_choose']\
+        #     and not self.update_attention_layer:
+        #     self.update_vision_block(device,dtype)
+        #     self.update_attention_layer=True
 
         
         #--------------------BEGIN------------------------------------
@@ -2360,31 +2360,31 @@ class DART_ViT(Qwen2VisionTransformerPretrainedModel):
                     device = hidden_states_pkg['hidden_states'].device
                     last_layer_state = hidden_states_pkg['hidden_states'].detach().clone()
                     #last_layer_state = self.norm(last_layer_state)
-                    k_states = hidden_states_pkg['k_states']  
-                    attn_scores = hidden_states_pkg['attn_scores']
+                    # k_states = hidden_states_pkg['k_states']  
+                    # attn_scores = hidden_states_pkg['attn_scores']
 
-                    if DART_config['vit_attn_scores_choose']:
-                        retained_image_tokens_index = self.get_retained_image_token_attn_scores(
-                            self.config, last_layer_state, k_states,attn_scores).to(device)
-                        del hidden_states_pkg['attn_scores']
-                        del attn_scores
-                        torch.cuda.synchronize()
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
-                    elif DART_config['vit_random_choose']:
-                        # 随机选取
-                        retained_image_tokens_index = self.get_retained_image_token_random(
-                            self.config, last_layer_state, k_states).to(device)
-                    elif DART_config['vit_diff_choose']:
-                        hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
-                        retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
+                    # if DART_config['vit_attn_scores_choose']:
+                    #     retained_image_tokens_index = self.get_retained_image_token_attn_scores(
+                    #         self.config, last_layer_state, k_states,attn_scores).to(device)
+                    #     del hidden_states_pkg['attn_scores']
+                    #     del attn_scores
+                    #     torch.cuda.synchronize()
+                    #     gc.collect()
+                    #     torch.cuda.empty_cache()
+                    #     # print("CUDA memory after clearing attn_scores: ", torch.cuda.memory_allocated() / 1024**2, "MB") # DEBUG
+                    # elif DART_config['vit_random_choose']:
+                    #     # 随机选取
+                    #     retained_image_tokens_index = self.get_retained_image_token_random(
+                    #         self.config, last_layer_state, k_states).to(device)
+                    # elif DART_config['vit_diff_choose']:
+                    hidden_states_cur = hidden_states_pkg['hidden_states'] # K-1层的输出，即K层的输入
+                    retained_image_tokens_index = self.get_retained_image_token_diff(self.config,hidden_states_cur,hidden_states_prev,last_layer_state)
 
-                    elif DART_config['vit_pivot_sim_choose']:
-                        retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
-                    else:
-                        retained_image_tokens_index = self.get_retained_image_token(
-                            self.config, last_layer_state, k_states).to(device)
+                    # elif DART_config['vit_pivot_sim_choose']:
+                    #     retained_image_tokens_index = self.get_retained_image_token_pivot_sim(self.config,last_layer_state, k_states)
+                    # else:
+                    #     retained_image_tokens_index = self.get_retained_image_token(
+                    #         self.config, last_layer_state, k_states).to(device)
 
                     # keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index,torch.arange(image_token_start_index+image_token_length,seq_len,device=device)))
                     #keep_indexs = torch.cat((torch.arange(image_token_start_index,device=device), retained_image_tokens_index))

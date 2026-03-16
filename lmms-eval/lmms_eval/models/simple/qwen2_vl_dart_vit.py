@@ -13,7 +13,9 @@ from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer
 import sys
 sys.path.append('~/ViT-Prunning-self/Qwen2-VL/')
-from Qwen2VL_DART_ViT import Qwen2VLForConditionalGeneration
+
+#from Qwen2VL_DART_ViT import Qwen2VLForConditionalGeneration
+from Qwen2VL_DART_ViT import get_model_class
 
 from lmms_eval import utils
 from lmms_eval.api.instance import Instance
@@ -55,10 +57,14 @@ class Qwen2_VL_DART_ViT(lmms):
         use_flash_attention_2: Optional[bool] = False,
         # max_pixels: int = 12845056,
         # min_pixels: int = 3136,
-        #max_pixels: int = 602112, # video setting
-        #min_pixels: int = 3136, # video setting
+        # max_pixels: int = 602112, # video setting
+        # min_pixels: int = 3136, # video setting
         max_pixels: int = 16384*28*28, # default setting
         min_pixels: int = 1280*28*28, # default setting
+        # max_pixels: int = 12288*28*28, # 3/4 resolution
+        # min_pixels: int = 960*28*28, # 3/4 resolution
+        # max_pixels: int = 8192*28*28, # middle resolution
+        # min_pixels: int = 640*28*28, # middle resolution
         max_num_frames: int = 32,
 
         attn_implementation="flash_attention_2",
@@ -84,6 +90,7 @@ class Qwen2_VL_DART_ViT(lmms):
         vit_pivot_sim_choose = False,
 
         torch_dtype="auto",
+        method="base",
         **kwargs,
     ) -> None:
         super().__init__()
@@ -103,6 +110,8 @@ class Qwen2_VL_DART_ViT(lmms):
             self._device = torch.device(f"cuda:{accelerator.local_process_index}")
             self.device_map = f"cuda:{accelerator.local_process_index}"
 
+        print("method1",method)
+        model_cls = get_model_class(method=method) 
         if use_flash_attention_2:
             # self._model = Qwen2VLForConditionalGeneration.from_pretrained(
             #     pretrained,
@@ -110,7 +119,7 @@ class Qwen2_VL_DART_ViT(lmms):
             #     device_map=self.device_map,
             #     attn_implementation="flash_attention_2",
             # ).eval()
-            self._model = Qwen2VLForConditionalGeneration.from_pretrained(
+            self._model = model_cls.from_pretrained(
                 pretrained,
                 torch_dtype=torch_dtype,
                 device_map=self.device_map,
@@ -118,7 +127,7 @@ class Qwen2_VL_DART_ViT(lmms):
             ).eval()
         else:
             # self._model = Qwen2VLForConditionalGeneration.from_pretrained(pretrained, torch_dtype="auto", device_map=self.device_map).eval()
-            self._model = Qwen2VLForConditionalGeneration.from_pretrained(pretrained, torch_dtype=torch_dtype, device_map=self.device_map).eval()
+            self._model = model_cls.from_pretrained(pretrained, torch_dtype=torch_dtype, device_map=self.device_map).eval()
 
         self.processor = AutoProcessor.from_pretrained(pretrained, max_pixels=max_pixels, min_pixels=min_pixels)
         #print("config_size",pretrained,self.processor.text_config.hidden_size, self.processor.text_config.vocab_size)
@@ -270,6 +279,7 @@ class Qwen2_VL_DART_ViT(lmms):
         sample_num=0
 
         for chunk in chunks:
+            time_start = time.time()
             contexts, all_gen_kwargs, doc_to_visual, doc_id, task, split = zip(*chunk)
             task = task[0]
             split = split[0]
@@ -299,6 +309,8 @@ class Qwen2_VL_DART_ViT(lmms):
                 if "<image>" in contexts[i]:
                     contexts[i] = contexts[i].replace("<image>", "")
 
+            time_before_load = time.time()
+            
             messages = []
             processed_visuals = []
             for i, context in enumerate(contexts):
@@ -340,8 +352,14 @@ class Qwen2_VL_DART_ViT(lmms):
 
                 messages.append(message)
 
+            time_load = time.time()
+            
             texts = [self.processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in messages]
             image_inputs, video_inputs = process_vision_info(messages)
+
+            time_process1 = time.time()
+
+            # 旧的处理逻辑
             if video_inputs is not None:
                 total_frames = video_inputs[0].shape[0]
                 indices = np.linspace(0, total_frames - 1, self.max_num_frames, dtype=int)
@@ -349,7 +367,36 @@ class Qwen2_VL_DART_ViT(lmms):
                 if total_frames - 1 not in indices:
                     indices = np.append(indices, total_frames - 1)
                 video_inputs[0] = video_inputs[0][indices]
+            # 新的？
+            # if video_inputs is not None and len(video_inputs) > 0 and video_inputs[0] is not None:
+            #     # Assuming video_inputs is a list where the first element holds the tensor
+            #     video_tensor = video_inputs[0]
+            #     if isinstance(video_tensor, torch.Tensor) and video_tensor.ndim > 0 and video_tensor.shape[0] > 0:
+            #         total_frames = video_tensor.shape[0]
+            #         indices = np.linspace(0, total_frames - 1, self.max_num_frames, dtype=int, endpoint=True)  # Ensure endpoint=True
+            #         # Ensure unique indices if linspace produces duplicates for few frames
+            #         indices = np.unique(indices)
+            #         # Append the last frame index if not already included and needed
+            #         # if total_frames > 0 and total_frames - 1 not in indices:
+            #         #     indices = np.append(indices, total_frames - 1)
+            #         #     indices = np.unique(indices) # Ensure uniqueness again
+
+            #         # Limit to max_num_frames if appending last frame exceeded it
+            #         if len(indices) > self.max_num_frames:
+            #             # This might happen if linspace already picked close indices including the end
+            #             # Or if max_num_frames is very small. Prioritize evenly spaced.
+            #             indices = np.linspace(0, total_frames - 1, self.max_num_frames, dtype=int, endpoint=True)
+            #             indices = np.unique(indices)
+
+            #         video_inputs[0] = video_tensor[indices]
+            #     else:
+            #         eval_logger.warning(f"Unexpected video_inputs format or empty tensor: {type(video_tensor)}")
+
+            time_lin = time.time()
             inputs = self.processor(text=texts, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+
+            time_process2 = time.time()
+            
 
             if self.device_map == "auto":
                 inputs = inputs.to("cuda")
@@ -421,6 +468,11 @@ class Qwen2_VL_DART_ViT(lmms):
             # )
             # ---------------test prefilling only end-------------------
 
+
+            time_run_llm = time.time()
+            # print("time in each stage",time_before_load-time_start, time_load-time_before_load, time_process1-time_load,\
+            #        time_lin-time_process1,time_process2-time_lin, time_run_llm-time_process2)
+
             
             # ---------------compute time-------------
             end_event.record()
@@ -428,12 +480,12 @@ class Qwen2_VL_DART_ViT(lmms):
             total_infer_time += start_event.elapsed_time(end_event)  # 毫秒
 
             sample_num+=1
-            if sample_num in [600,1000,2400]:
+            if sample_num in [400,600,1000,2400]:
                 total_seconds = total_infer_time / 1000
                 minutes = int(total_seconds // 60)
                 seconds = total_seconds % 60
 
-                print(f"Total pure GPU inference time: {minutes} min {seconds:.2f} sec")
+                print(f"Total pure GPU inference time: {minutes} min {seconds:.2f} sec", flush=True)
                 
             # ---------------compute time-------------
 
