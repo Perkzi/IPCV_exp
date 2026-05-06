@@ -8,11 +8,11 @@
 # reduction_ratios=(0.2 0.3 0.5) # ѹ���ʺ�ѡ
 
 #export HF_HOME="/obs/users/chenshuang/huggingface" # 为了防止lmms-eval直接将数据集下载到默认的HF_HOME地址
-tasks=("vizwiz_vqa" "ocrbench")
+tasks=("textvqa" "ocrbench")
 pruned_layers=(3)
-reduction_ratios=( 0.897) # 0.229 0.582 0.936
+reduction_ratios=( 0.95) # 0.229 0.582 0.936
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.897)
+vit_reduction_ratios=(0)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -35,7 +35,7 @@ for task in "${tasks[@]}"; do
           model_name="Qwen2-VL-7B-Instruct"
 
 
-          method=v2drop # default base ipcv fastv sparsevlm v2drop tome tofu saint ficoco sito hiprune
+          method=pact # default base ipcv fastv sparsevlm v2drop tome tofu saint ficoco sito hiprune
 
           output_path="./logs/${model_name}/${task}/${method}/pruned_${pruned_layer}_ratio_${reduction_ratio}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
           #output_path="./logs/${model_name}/${task}/vit_pruned_${vit_pruned_layer}_vit_ratio_${vit_reduction_ratio}/"
@@ -78,7 +78,7 @@ for task in "${tasks[@]}"; do
           #     --output_path "$output_path"
 
           python3 -m accelerate.commands.launch \
-              --num_processes=2 \
+              --num_processes=1 \
               --main_process_port 50099 \
               -m lmms_eval \
               --model qwen2_vl_dart_vit \

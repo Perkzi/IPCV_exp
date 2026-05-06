@@ -150,6 +150,7 @@ def get_aggregation(name):
 
 def get_metric_aggregation(name):
     try:
+
         return METRIC_AGGREGATION_REGISTRY[name]
     except KeyError:
         eval_logger.warning(

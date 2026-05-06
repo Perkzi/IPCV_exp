@@ -403,6 +403,7 @@ def evaluate(
 
     # get lists of group hierarchy and each type of request
     eval_tasks = get_task_list(task_dict)
+    #print("task_dict", task_dict,eval_tasks)
     name_to_task = {}
     if not log_samples:
         if not all("bypass" not in getattr(task_output.task, "_metric_fn_list", {}).keys() for task_output in eval_tasks):
@@ -415,6 +416,8 @@ def evaluate(
         task: Task = task_output.task
         task_name = task_output.task_name
         task.args = cli_args
+
+        #print("type task",type(task),type(task.config.process_results),task.config)
 
         name_to_task[task_name] = task
 

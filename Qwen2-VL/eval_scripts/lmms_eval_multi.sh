@@ -11,9 +11,9 @@
 #tasks=(  "refcoco" )
 tasks=("mmbench_en") # "refcoco_bbox_rec_val" "refcoco_bbox_rec_testA" "refcoco_bbox_rec_testB") "mvbench"
 pruned_layers=(3)
-reduction_ratios=( 0.582)  # spavlm 0.229 0.582 0.936  v2d 0.385 0.622 0.897
+reduction_ratios=( 0.95)  # spavlm 0.229 0.582 0.936  v2d 0.385 0.622 0.897
 vit_pruned_layers=( 3)
-vit_reduction_ratios=(0.582)
+vit_reduction_ratios=(0)
 
 for task in "${tasks[@]}"; do
   for pruned_layer in "${pruned_layers[@]}"; do
@@ -63,7 +63,7 @@ for task in "${tasks[@]}"; do
 
           torch_dtype=float16
 
-          method=sparsevlm # default base ipcv fastv sparsevlm v2drop tome tofu saint ficoco sito hiprune
+          method=pact # default base ipcv fastv sparsevlm v2drop tome tofu saint ficoco sito hiprune pact
 
           log_file="${output_path}/run_detail.log"
 

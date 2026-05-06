@@ -71,6 +71,10 @@ def get_model_class(method: str):
         module = importlib.import_module("Qwen2VL_DART_ViT.modeling_qwen2_vl_FiCoCo")
     elif method == "hiprune":
         module = importlib.import_module("Qwen2VL_DART_ViT.modeling_qwen2_vl_Hiprune")
+    elif method == "pact":
+        module = importlib.import_module("Qwen2VL_DART_ViT.modeling_qwen2_vl_PACT")
+    elif method == "divprune":
+        module = importlib.import_module("Qwen2VL_DART_ViT.modeling_qwen2_vl_divprune")
     else:
         raise ValueError(f"Unknown method: {method}")
 

@@ -820,6 +820,12 @@ class ConfigurableTask(Task):
         self._aggregation_list = {}
         self._higher_is_better = {}
 
+        # print("self.config",self.config)
+        # metric_list=[{'metric': 'gpt_eval_score', 'aggregation': <function mmbench_aggregate_dev_results_eval at 0x7f31980f5f30>,
+        #  'higher_is_better': True}, {'metric': 'submission', 'aggregation': <function mmbench_aggregate_dev_results_submission at 0x7f31980f63b0>,
+        #  'higher_is_better': True}],
+        # process_results=<function mmbench_process_results at 0x7f32083ca7a0>
+
         if self.config.metric_list is None:
             # TODO: handle this in TaskConfig.__post_init__ ?
             _metric_list = DEFAULT_METRIC_REGISTRY[self.config.output_type]
@@ -864,6 +870,8 @@ class ConfigurableTask(Task):
                 else:
                     eval_logger.warning(f"[Task: {self._config.task}] metric {metric_name} is defined, but higher_is_better is not. " f"using default " f"higher_is_better={is_higher_better(metric_name)}")
                     self._higher_is_better[metric_name] = is_higher_better(metric_name)
+
+        # print("self._aggregation_list",self._aggregation_list) # {'gpt_eval_score': <function mmbench_aggregate_dev_results_eval at 0x7f31980f5f30>, 'submission': <function mmbench_aggregate_dev_results_submission at 0x7f31980f63b0>}
 
     @retry(stop=(stop_after_attempt(5) | stop_after_delay(60)), wait=wait_fixed(2))
     def download(self, dataset_kwargs=None) -> None:
